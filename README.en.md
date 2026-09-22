@@ -7,7 +7,7 @@ A Windows program: **locks the screen when the display turns off or the lid is c
 ---
 ## Quick start
 
-Download ScreenOffLock.exe from the [Releases page](https://github.com/AomiRaku/Screen-Off-Lock/releases).
+Download  `ScreenOffLock.exe`  from the [Releases page](https://github.com/AomiRaku/Screen-Off-Lock/releases).
 
 Just double-click `ScreenOffLock.exe` to run it — no administrator rights needed.
 
