@@ -2,17 +2,20 @@
 
 **English** | [简体中文](README.md)
 
-A tiny Windows tray utility: **locks the screen when the display turns off or the lid is closed.**
-
-> Author: Raku Inkyetta 羽梦千景 · Project: <https://github.com/AomiRaku/Screen-Off-Lock>
->
-> Internal identifiers (file name, window classes, mutex, registry path) are always the
-> space-free `ScreenOffLock`; only the name shown in the UI has a space.
-
-No main window, no browser engine, no third-party runtime — pure Win32 API. A single
-~62 KB exe, measured at roughly 10 MB working set (almost all of it shared system DLL pages).
+A Windows program: **locks the screen when the display turns off or the lid is closed.**
 
 ---
+## Quick start
+
+Download ScreenOffLock.exe from the [Releases page](https://github.com/AomiRaku/Screen-Off-Lock/releases).
+
+Just double-click `ScreenOffLock.exe` to run it — no administrator rights needed.
+
+For autostart, right-click the tray icon and tick **Run at startup** (it writes the
+registry Run key).
+
+To remove completely: untick **Run at startup** → exit → delete the exe → delete
+`HKCU\Software\ScreenOffLock`.
 
 ## Features
 
@@ -46,16 +49,6 @@ No main window, no browser engine, no third-party runtime — pure Win32 API. A 
   The Run key itself belongs to Windows and is never created or removed, and other entries
   in it are untouched.
 - Launching the exe twice shows "Already running." and exits.
-
-## Usage
-
-Just run `dist\ScreenOffLock.exe`. No installation, no administrator rights.
-
-For autostart, right-click the tray icon and tick **Run at startup** — no shortcut in the
-Startup folder required.
-
-To remove completely: untick **Run at startup** → exit → delete the exe → delete
-`HKCU\Software\ScreenOffLock`.
 
 ## Building from source
 
