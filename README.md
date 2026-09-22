@@ -2,16 +2,19 @@
 
 **简体中文** | [English](README.en.md)
 
-一个极小的 Windows 托盘程序：**屏幕被关闭、或者合上盖子时自动锁屏**。
-
-> 作者：Raku Inkyetta 羽梦千景 · 项目地址：<https://github.com/AomiRaku/Screen-Off-Lock>
->
-> 程序内部标识（文件名、窗口类名、互斥体、注册表路径）一律用不带空格的
-> `ScreenOffLock`，只有界面上显示的名字带空格。
-
-没有主窗口，没有浏览器内核，不依赖任何第三方运行时——纯 Win32 API 实现，单个约 55 KB 的 exe，实测常驻工作集约 10 MB（其中绝大部分是 user32 / shell32 等系统 DLL 的共享页面）。
+一个 Windows 程序：**屏幕被关闭、或者合上盖子时自动锁屏**。
 
 ---
+## 快速开始
+
+前往 [Release 页面](https://github.com/AomiRaku/Screen-Off-Lock/releases) 下载 ScreenOffLock.exe。
+
+双击 `ScreenOffLock.exe` 运行即可，无需管理员权限。
+
+想让它开机自启，直接右键托盘图标勾选「开机启动」即可（写的是注册表 Run 键）。
+
+完全卸载：先取消勾选「开机启动」→ 退出程序 → 删除 exe →
+删掉注册表项 `HKCU\Software\ScreenOffLock`。
 
 ## 功能
 
@@ -43,16 +46,6 @@
   直接删除**，不会留下 `0` 之类的残骸；Run 键本身是系统原有的，不会被创建或删除，
   同键下的其他启动项也不受影响。
 - 重复运行 exe 时会弹窗提示「已在运行，请勿重复运行。」然后自动退出
-
-## 使用
-
-双击 `dist\ScreenOffLock.exe` 即可，无需安装、无需管理员权限。
-
-想让它开机自启，直接右键托盘图标勾选「开机启动」即可（写的是注册表 Run 键，
-不必再往启动文件夹里放快捷方式）。
-
-完全卸载：先取消勾选「开机启动」→ 退出程序 → 删除 exe →
-删掉注册表项 `HKCU\Software\ScreenOffLock`。
 
 ## 从源码构建
 
