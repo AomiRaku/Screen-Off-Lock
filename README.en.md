@@ -2,7 +2,7 @@
 
 <p align="center"><b>English</b> | <a href="README.md">简体中文</a></p>
 
-<p align="center">A Windows program: <b>locks the screen when the display turns off or the lid is closed.</b></p>
+<p align="center">A Light Windows program. <b>locks the screen when the display turns off or the lid is closed.</b></p>
 
 ---
 ## Quick start
