@@ -27,6 +27,7 @@ To remove completely: untick **Run at startup** → exit → delete the exe → 
   | --- | --- |
   | Lock when screen turns off | Checkable; takes effect immediately and is saved |
   | Lock when lid is closed | Same; greyed out on desktops with no lid device |
+  | Lock delay | Radio submenu: Immediately / 3 / 5 / 10 / 30 seconds. Locks that many seconds after the display turns off or the lid closes; waking the display or opening the lid in the meantime cancels it |
   | —— separator —— | |
   | Run at startup | Starts automatically at sign-in; unchecking **deletes** the registry value |
   | —— separator —— | |
@@ -38,9 +39,11 @@ To remove completely: untick **Run at startup** → exit → delete the exe → 
   first; the choice is stored in the registry and never asked again. To change it later,
   use **Language / 语言** in the About window (open dialogs are closed so they can be
   rebuilt in the new language).
-- Settings live in `HKCU\Software\ScreenOffLock`, all DWORDs (`1` = on, `0` = off):
-  - `LockWhenScreenOff` — lock when the display turns off (default on)
-  - `LockWhenLidClosed` — lock when the lid closes (default on)
+- Settings live in `HKCU\Software\ScreenOffLock`, all DWORDs:
+  - `LockWhenScreenOff` — lock when the display turns off, `1` = on / `0` = off (default on)
+  - `LockWhenLidClosed` — lock when the lid closes, `1` = on / `0` = off (default on)
+  - `LockDelay` — lock delay in seconds, `0` = immediately (absent is treated as `0`);
+    only `0` / `3` / `5` / `10` / `30` are accepted, anything else falls back to `0`
   - `Language` — `0` = English, `1` = Simplified Chinese (**absent** means first run)
   - `SkipSettingsWarning` — suppress the first-run settings notice (not written by default)
 - Autostart is stored as a `ScreenOffLock` value under
@@ -163,6 +166,13 @@ Both state machines act only on the open-to-closed edge, so repeated notificatio
 lock twice; and if the display was already off or the lid already closed at startup, no
 lock happens immediately. `LockWorkStation()` is idempotent, so both paths firing at once
 is harmless.
+
+With a lock delay set, hitting an edge only records a pending flag and starts a `SetTimer`
+timer; the toggles and the current state are checked once more before locking. Waking the
+display (dimming included) clears the "screen off" pending flag, and opening the lid clears
+the "lid" one — the two are independent: closing a laptop lid usually raises both
+notifications, so opening the lid without waking the display still lets the "screen off"
+one lock on time.
 
 Whether the machine has a lid is decided by `GetPwrCapabilities`' `LidPresent`, **not** by
 the return value of `RegisterPowerSettingNotification` — measurements show the latter does

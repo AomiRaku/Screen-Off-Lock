@@ -35,7 +35,7 @@
  * 无空格的 ScreenOffLock，免得空格在各处惹麻烦。
  */
 #define APP_NAME        L"ScreenOff Lock"
-#define APP_VERSION     L"Build 1300"
+#define APP_VERSION     L"Build 1400"
 #define APP_AUTHOR      L"Raku Inkyetta 羽梦千景"
 #define APP_URL         L"https://github.com/AomiRaku/Screen-Off-Lock"
 
@@ -65,10 +65,18 @@ enum
 
     S_MENU_LOCK_SCREEN,
     S_MENU_LOCK_LID,
+    S_MENU_LOCK_DELAY,
     S_MENU_AUTOSTART,
     S_MENU_CHECK,
     S_MENU_ABOUT,
     S_MENU_EXIT,
+
+    /* 延迟锁定子菜单 */
+    S_DELAY_NOW,
+    S_DELAY_3,
+    S_DELAY_5,
+    S_DELAY_10,
+    S_DELAY_30,
 
     S_CHECK_TITLE,
     S_CHECK_INTRO,
@@ -129,10 +137,17 @@ static const WCHAR *g_str[LANG_COUNT][S_COUNT] =
 
         L"Lock when screen turns off",
         L"Lock when lid is closed",
+        L"Lock delay",
         L"Run at startup",
         L"Check settings",
         L"About",
         L"Exit",
+
+        L"Immediately",
+        L"3 seconds",
+        L"5 seconds",
+        L"10 seconds",
+        L"30 seconds",
 
         L"Check settings",
         L"With the current power settings,",
@@ -189,10 +204,17 @@ static const WCHAR *g_str[LANG_COUNT][S_COUNT] =
 
         L"关闭屏幕时锁屏",
         L"合盖锁屏",
+        L"延迟锁定",
         L"开机启动",
         L"检查设置",
         L"关于",
         L"退出",
+
+        L"立即",
+        L"3 秒",
+        L"5 秒",
+        L"10 秒",
+        L"30 秒",
 
         L"检查设置",
         L"当前电脑设置下，",
@@ -248,6 +270,7 @@ static LangId g_lang = LANG_ZH;
 #define TRAY_ICON_ID    1
 #define IDI_APP_ICON    1        /* app.rc 中的图标资源 ID */
 #define WM_TRAYICON     (WM_APP + 1)
+#define TIMER_LOCK_DELAY 1       /* 延迟锁定的计时器 ID */
 
 #define IDM_LOCK_ON_OFF 1001
 #define IDM_LID_LOCK    1002
@@ -256,9 +279,17 @@ static LangId g_lang = LANG_ZH;
 #define IDM_ABOUT       1005
 #define IDM_EXIT        1006
 
+/* 延迟锁定子菜单：ID 连续，方便用 CheckMenuRadioItem 画单选圆点 */
+#define IDM_DELAY_NOW   1010
+#define IDM_DELAY_3     1011
+#define IDM_DELAY_5     1012
+#define IDM_DELAY_10    1013
+#define IDM_DELAY_30    1014
+
 #define REG_SUBKEY         L"Software\\ScreenOffLock"
 #define REG_VALUE_SCREEN   L"LockWhenScreenOff"
 #define REG_VALUE_LID      L"LockWhenLidClosed"
+#define REG_VALUE_DELAY    L"LockDelay"
 #define REG_VALUE_SKIPWARN L"SkipSettingsWarning"
 #define REG_VALUE_LANG     L"Language"
 
@@ -367,6 +398,10 @@ static UINT         g_uTaskbarCreated  = 0;
 
 static BOOL         g_lockOnScreenOff  = TRUE;   /* 菜单勾选状态：关屏时锁屏 */
 static BOOL         g_lockOnLidClose   = TRUE;   /* 菜单勾选状态：合盖时锁屏 */
+static DWORD        g_lockDelay        = 0;      /* 延迟秒数，0 = 立即锁定 */
+static BOOL         g_pendingScreenOff = FALSE;  /* 屏灭触发的待定锁定 */
+static BOOL         g_pendingLidClose  = FALSE;  /* 合盖触发的待定锁定 */
+static BOOL         g_lockTimerArmed   = FALSE;  /* 待定锁定的计时器是否在跑 */
 static BOOL         g_hasLid           = FALSE;  /* 这台机器有没有盖子设备 */
 static DWORD        g_lastDisplayState = DISPLAY_STATE_ON;
 static BOOL         g_hasDisplayState  = FALSE;
@@ -410,7 +445,7 @@ static void EnableHighDpi(void)
  * 设置的读写（HKCU\Software\ScreenOffLock）
  * ------------------------------------------------------------------------ */
 
-static BOOL LoadBoolSetting(const WCHAR *name, BOOL def)
+static DWORD LoadDwordSetting(const WCHAR *name, DWORD def)
 {
     HKEY  hKey   = NULL;
     DWORD dwVal  = 0;
@@ -427,22 +462,53 @@ static BOOL LoadBoolSetting(const WCHAR *name, BOOL def)
     if (lr != ERROR_SUCCESS || dwType != REG_DWORD || cbVal != sizeof(dwVal))
         return def;
 
-    return dwVal ? TRUE : FALSE;
+    return dwVal;
 }
 
-static void SaveBoolSetting(const WCHAR *name, BOOL value)
+static void SaveDwordSetting(const WCHAR *name, DWORD value)
 {
-    HKEY  hKey = NULL;
-    DWORD dwVal;
+    HKEY hKey = NULL;
 
     if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_SUBKEY, 0, NULL,
                         REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL,
                         &hKey, NULL) != ERROR_SUCCESS)
         return;
 
-    dwVal = value ? 1u : 0u;
-    RegSetValueExW(hKey, name, 0, REG_DWORD, (const BYTE *)&dwVal, sizeof(dwVal));
+    RegSetValueExW(hKey, name, 0, REG_DWORD, (const BYTE *)&value, sizeof(value));
     RegCloseKey(hKey);
+}
+
+/* 开关类设置就是取值 0 / 1 的 DWORD */
+static BOOL LoadBoolSetting(const WCHAR *name, BOOL def)
+{
+    return LoadDwordSetting(name, def ? 1u : 0u) ? TRUE : FALSE;
+}
+
+static void SaveBoolSetting(const WCHAR *name, BOOL value)
+{
+    SaveDwordSetting(name, value ? 1u : 0u);
+}
+
+/* ---------------------------------------------------------------------------
+ * 延迟锁定
+ *
+ * 菜单里只有这几档可选；注册表要是被人手工改成别的值，就退回“立即”，
+ * 免得子菜单里出现一项都没被选中的状态。
+ * ------------------------------------------------------------------------ */
+
+static const DWORD kLockDelays[] = { 0, 3, 5, 10, 30 };
+
+static BOOL IsValidLockDelay(DWORD seconds)
+{
+    int i;
+
+    for (i = 0; i < (int)(sizeof(kLockDelays) / sizeof(kLockDelays[0])); ++i)
+    {
+        if (kLockDelays[i] == seconds)
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2039,6 +2105,31 @@ static void ShowSettingsWarning(void)
     SetForegroundWindow(g_hWarnWnd);
 }
 
+/* 延迟档位 <-> 命令 ID 的双向映射 */
+static UINT DelayCommandForSeconds(DWORD seconds)
+{
+    switch (seconds)
+    {
+    case 3:  return IDM_DELAY_3;
+    case 5:  return IDM_DELAY_5;
+    case 10: return IDM_DELAY_10;
+    case 30: return IDM_DELAY_30;
+    default: return IDM_DELAY_NOW;
+    }
+}
+
+static DWORD DelaySecondsForCommand(UINT id)
+{
+    switch (id)
+    {
+    case IDM_DELAY_3:  return 3;
+    case IDM_DELAY_5:  return 5;
+    case IDM_DELAY_10: return 10;
+    case IDM_DELAY_30: return 30;
+    default:           return 0;
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * 托盘右键菜单
  *
@@ -2062,6 +2153,28 @@ static void ShowContextMenu(void)
                     | (g_lockOnLidClose ? MF_CHECKED : MF_UNCHECKED)
                     | (g_hasLid ? 0 : MF_GRAYED),
                 IDM_LID_LOCK, T(S_MENU_LOCK_LID));
+
+    /* 延迟锁定：单选子菜单，勾当前档位 */
+    {
+        HMENU hDelay = CreatePopupMenu();
+
+        if (hDelay)
+        {
+            AppendMenuW(hDelay, MF_STRING, IDM_DELAY_NOW, T(S_DELAY_NOW));
+            AppendMenuW(hDelay, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(hDelay, MF_STRING, IDM_DELAY_3,  T(S_DELAY_3));
+            AppendMenuW(hDelay, MF_STRING, IDM_DELAY_5,  T(S_DELAY_5));
+            AppendMenuW(hDelay, MF_STRING, IDM_DELAY_10, T(S_DELAY_10));
+            AppendMenuW(hDelay, MF_STRING, IDM_DELAY_30, T(S_DELAY_30));
+
+            /* 画成单选圆点；范围里夹着分隔线没关系 */
+            CheckMenuRadioItem(hDelay, IDM_DELAY_NOW, IDM_DELAY_30,
+                               DelayCommandForSeconds(g_lockDelay), MF_BYCOMMAND);
+
+            AppendMenuW(hMenu, MF_STRING | MF_POPUP,
+                        (UINT_PTR)hDelay, T(S_MENU_LOCK_DELAY));
+        }
+    }
 
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
 
@@ -2091,6 +2204,89 @@ static void ShowContextMenu(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * 延迟锁定
+ *
+ * 屏灭 / 合盖命中之后，如果设了延迟就先起一个计时器，到点再锁；屏幕重新亮起
+ * 或盖子重新打开会打断计时，这次就不锁了。
+ *
+ * 两条路径各自记一个“待定”标记：笔记本合盖时往往关屏和合盖两条通知都会来，
+ * 其中一条恢复（比如开盖）只取消它自己那一条，另一条仍照常计时；两条都取消
+ * 了才真正拆掉计时器。
+ * ------------------------------------------------------------------------ */
+
+static void UpdateLockTimer(void)
+{
+    if (g_pendingScreenOff || g_pendingLidClose)
+    {
+        /* 同一个 ID 再 SetTimer 就是重新计时，所以总是按当前档位走 */
+        SetTimer(g_hWnd, TIMER_LOCK_DELAY, g_lockDelay * 1000u, NULL);
+        g_lockTimerArmed = TRUE;
+    }
+    else if (g_lockTimerArmed)
+    {
+        KillTimer(g_hWnd, TIMER_LOCK_DELAY);
+        g_lockTimerArmed = FALSE;
+    }
+}
+
+/* 屏幕重新亮起：取消“关屏”这条路径的待定锁定 */
+static void CancelScreenLock(void)
+{
+    if (g_pendingScreenOff)
+    {
+        g_pendingScreenOff = FALSE;
+        UpdateLockTimer();
+    }
+}
+
+/* 盖子重新打开：取消“合盖”这条路径的待定锁定 */
+static void CancelLidLock(void)
+{
+    if (g_pendingLidClose)
+    {
+        g_pendingLidClose = FALSE;
+        UpdateLockTimer();
+    }
+}
+
+/*
+ * 命中一次“该锁屏了”：没设延迟就立刻锁，否则记下待定并起计时。
+ * fromScreen 为 TRUE 表示来自关屏，FALSE 表示来自合盖。
+ */
+static void RequestLock(BOOL fromScreen)
+{
+    if (g_lockDelay == 0)
+    {
+        LockWorkStation();
+        return;
+    }
+
+    if (fromScreen)
+        g_pendingScreenOff = TRUE;
+    else
+        g_pendingLidClose  = TRUE;
+
+    UpdateLockTimer();
+}
+
+/* 计时到点：按开关和状态再核对一次，然后锁定 */
+static void OnLockDelayElapsed(void)
+{
+    BOOL shouldLock =
+        (g_pendingScreenOff && g_lockOnScreenOff
+             && g_hasDisplayState && g_lastDisplayState == DISPLAY_STATE_OFF)
+        || (g_pendingLidClose && g_lockOnLidClose
+             && g_hasLidState && g_lastLidState == LID_STATE_CLOSED);
+
+    g_pendingScreenOff = FALSE;
+    g_pendingLidClose  = FALSE;
+    UpdateLockTimer();                  /* 标记都清了，顺带拆掉计时器 */
+
+    if (shouldLock)
+        LockWorkStation();
+}
+
+/* ---------------------------------------------------------------------------
  * 显示器状态变化
  * ------------------------------------------------------------------------ */
 
@@ -2101,12 +2297,18 @@ static void OnDisplayStateChanged(DWORD newState)
     g_lastDisplayState = newState;
     g_hasDisplayState  = TRUE;
 
+    if (newState != DISPLAY_STATE_OFF)
+    {
+        /* 屏幕又亮了（或转为变暗）：人回来了，这次不锁 */
+        CancelScreenLock();
+        return;
+    }
+
     /* 只在“由亮转灭”的那一次边沿动作，重复的通知不重复锁屏 */
-    if (newState != DISPLAY_STATE_OFF || prevState == DISPLAY_STATE_OFF)
+    if (prevState == DISPLAY_STATE_OFF || !g_lockOnScreenOff)
         return;
 
-    if (g_lockOnScreenOff)
-        LockWorkStation();
+    RequestLock(TRUE);
 }
 
 /* ---------------------------------------------------------------------------
@@ -2120,12 +2322,18 @@ static void OnLidStateChanged(DWORD newState)
     g_lastLidState = newState;
     g_hasLidState  = TRUE;
 
+    if (newState != LID_STATE_CLOSED)
+    {
+        /* 盖子重新打开：取消这次合盖锁定 */
+        CancelLidLock();
+        return;
+    }
+
     /* 只在“由开转合”的那一次边沿动作 */
-    if (newState != LID_STATE_CLOSED || prevState == LID_STATE_CLOSED)
+    if (prevState == LID_STATE_CLOSED || !g_lockOnLidClose)
         return;
 
-    if (g_lockOnLidClose)
-        LockWorkStation();
+    RequestLock(FALSE);
 }
 
 /* ---------------------------------------------------------------------------
@@ -2148,6 +2356,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         case IDM_LOCK_ON_OFF:
             g_lockOnScreenOff = !g_lockOnScreenOff;
             SaveBoolSetting(REG_VALUE_SCREEN, g_lockOnScreenOff);
+
+            if (!g_lockOnScreenOff)         /* 功能关掉了，就别再等着锁 */
+                CancelScreenLock();
             break;
 
         case IDM_LID_LOCK:
@@ -2155,7 +2366,22 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             {
                 g_lockOnLidClose = !g_lockOnLidClose;
                 SaveBoolSetting(REG_VALUE_LID, g_lockOnLidClose);
+
+                if (!g_lockOnLidClose)
+                    CancelLidLock();
             }
+            break;
+
+        case IDM_DELAY_NOW:
+        case IDM_DELAY_3:
+        case IDM_DELAY_5:
+        case IDM_DELAY_10:
+        case IDM_DELAY_30:
+            g_lockDelay = DelaySecondsForCommand(LOWORD(wParam));
+            SaveDwordSetting(REG_VALUE_DELAY, g_lockDelay);
+
+            /* 正等着的话按新档位重新计时；选“立即”就马上了结 */
+            UpdateLockTimer();
             break;
 
         case IDM_CHECK:
@@ -2180,6 +2406,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         }
         return 0;
 
+    case WM_TIMER:
+        if (wParam == TIMER_LOCK_DELAY)
+            OnLockDelayElapsed();
+        return 0;
+
     case WM_POWERBROADCAST:
         if (wParam == PBT_POWERSETTINGCHANGE && lParam)
         {
@@ -2199,6 +2430,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
     case WM_DESTROY:
         RemoveTrayIcon();
+
+        if (g_lockTimerArmed)
+        {
+            KillTimer(hWnd, TIMER_LOCK_DELAY);
+            g_lockTimerArmed = FALSE;
+        }
 
         if (g_hPowerNotify)
         {
@@ -2310,6 +2547,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     g_lockOnScreenOff = LoadBoolSetting(REG_VALUE_SCREEN, TRUE);
     g_lockOnLidClose  = LoadBoolSetting(REG_VALUE_LID,    TRUE);
+
+    g_lockDelay = LoadDwordSetting(REG_VALUE_DELAY, 0);
+
+    if (!IsValidLockDelay(g_lockDelay))     /* 注册表被手工改坏就退回“立即” */
+        g_lockDelay = 0;
 
     /* --- 托盘图标 -------------------------------------------------------- */
 
