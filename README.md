@@ -2,7 +2,7 @@
 
 <p align="center"><b>简体中文</b> | <a href="README.en.md">English</a></p>
 
-<p align="center">一个 Windows 程序：<b>屏幕被关闭、或者合上盖子时自动锁屏</b>。</p>
+<p align="center">轻量 Windows 程序，<b>屏幕被关闭、或者合上盖子时自动锁屏</b>。</p>
 
 ---
 ## 快速开始
