@@ -7,7 +7,7 @@
 ---
 ## Quick start
 
-Download  `ScreenOffLock.exe`  from the [Releases page](https://github.com/AomiRaku/Screen-Off-Lock/releases).
+Download  `ScreenOffLock.exe`  from the [Releases page](https://github.com/AomiRaku/Screen-Off-Lock/releases/latest).
 
 Just double-click `ScreenOffLock.exe` to run it — no administrator rights needed.
 
