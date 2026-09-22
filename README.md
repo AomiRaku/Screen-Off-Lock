@@ -7,7 +7,7 @@
 ---
 ## 快速开始
 
-前往 [Release 页面](https://github.com/AomiRaku/Screen-Off-Lock/releases) 下载 ScreenOffLock.exe。
+前往 [Release 页面](https://github.com/AomiRaku/Screen-Off-Lock/releases) 下载  `ScreenOffLock.exe` 。
 
 双击 `ScreenOffLock.exe` 运行即可，无需管理员权限。
 
