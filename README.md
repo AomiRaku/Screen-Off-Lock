@@ -204,3 +204,7 @@ ScreenOffLock\
 ├─ dist\                       编译产物
 └─ .toolchain\                 自动下载的工具链（可删）
 ```
+
+## 许可证
+
+本项目以 [MIT 许可证](LICENSE) 发布。

@@ -492,23 +492,69 @@ static void SaveBoolSetting(const WCHAR *name, BOOL value)
 /* ---------------------------------------------------------------------------
  * 延迟锁定
  *
- * 菜单里只有这几档可选；注册表要是被人手工改成别的值，就退回“立即”，
- * 免得子菜单里出现一项都没被选中的状态。
+ * 菜单里只有下面这几档，表里的顺序就是菜单里的顺序；注册表要是被人手工改成
+ * 别的值，就退回“立即”，免得子菜单里出现一项都没被选中的状态。
+ *
+ * 档位、命令 ID 和文案全在这一张表里，以后加档位只改这一处。
  * ------------------------------------------------------------------------ */
 
-static const DWORD kLockDelays[] = { 0, 3, 5, 10, 30 };
+typedef struct
+{
+    DWORD seconds;          /* 0 = 立即 */
+    UINT  commandId;
+    int   strId;            /* S_DELAY_* */
+} DelayItem;
+
+static const DelayItem kDelayItems[] =
+{
+    { 0,  IDM_DELAY_NOW, S_DELAY_NOW },
+    { 3,  IDM_DELAY_3,   S_DELAY_3   },
+    { 5,  IDM_DELAY_5,   S_DELAY_5   },
+    { 10, IDM_DELAY_10,  S_DELAY_10  },
+    { 30, IDM_DELAY_30,  S_DELAY_30  }
+};
+
+#define DELAY_ITEM_COUNT ((int)(sizeof(kDelayItems) / sizeof(kDelayItems[0])))
 
 static BOOL IsValidLockDelay(DWORD seconds)
 {
     int i;
 
-    for (i = 0; i < (int)(sizeof(kLockDelays) / sizeof(kLockDelays[0])); ++i)
+    for (i = 0; i < DELAY_ITEM_COUNT; ++i)
     {
-        if (kLockDelays[i] == seconds)
+        if (kDelayItems[i].seconds == seconds)
             return TRUE;
     }
 
     return FALSE;
+}
+
+/* 档位 -> 命令 ID（弹菜单时决定哪一项画单选圆点） */
+static UINT DelayCommandForSeconds(DWORD seconds)
+{
+    int i;
+
+    for (i = 0; i < DELAY_ITEM_COUNT; ++i)
+    {
+        if (kDelayItems[i].seconds == seconds)
+            return kDelayItems[i].commandId;
+    }
+
+    return IDM_DELAY_NOW;
+}
+
+/* 命令 ID -> 档位（点了菜单之后换算成秒数） */
+static DWORD DelaySecondsForCommand(UINT id)
+{
+    int i;
+
+    for (i = 0; i < DELAY_ITEM_COUNT; ++i)
+    {
+        if (kDelayItems[i].commandId == id)
+            return kDelayItems[i].seconds;
+    }
+
+    return 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2105,31 +2151,6 @@ static void ShowSettingsWarning(void)
     SetForegroundWindow(g_hWarnWnd);
 }
 
-/* 延迟档位 <-> 命令 ID 的双向映射 */
-static UINT DelayCommandForSeconds(DWORD seconds)
-{
-    switch (seconds)
-    {
-    case 3:  return IDM_DELAY_3;
-    case 5:  return IDM_DELAY_5;
-    case 10: return IDM_DELAY_10;
-    case 30: return IDM_DELAY_30;
-    default: return IDM_DELAY_NOW;
-    }
-}
-
-static DWORD DelaySecondsForCommand(UINT id)
-{
-    switch (id)
-    {
-    case IDM_DELAY_3:  return 3;
-    case IDM_DELAY_5:  return 5;
-    case IDM_DELAY_10: return 10;
-    case IDM_DELAY_30: return 30;
-    default:           return 0;
-    }
-}
-
 /* ---------------------------------------------------------------------------
  * 托盘右键菜单
  *
@@ -2160,12 +2181,17 @@ static void ShowContextMenu(void)
 
         if (hDelay)
         {
-            AppendMenuW(hDelay, MF_STRING, IDM_DELAY_NOW, T(S_DELAY_NOW));
-            AppendMenuW(hDelay, MF_SEPARATOR, 0, NULL);
-            AppendMenuW(hDelay, MF_STRING, IDM_DELAY_3,  T(S_DELAY_3));
-            AppendMenuW(hDelay, MF_STRING, IDM_DELAY_5,  T(S_DELAY_5));
-            AppendMenuW(hDelay, MF_STRING, IDM_DELAY_10, T(S_DELAY_10));
-            AppendMenuW(hDelay, MF_STRING, IDM_DELAY_30, T(S_DELAY_30));
+            int i;
+
+            for (i = 0; i < DELAY_ITEM_COUNT; ++i)
+            {
+                /* 第一档「立即」和其余档位之间来一条分隔线 */
+                if (i == 1)
+                    AppendMenuW(hDelay, MF_SEPARATOR, 0, NULL);
+
+                AppendMenuW(hDelay, MF_STRING,
+                            kDelayItems[i].commandId, T(kDelayItems[i].strId));
+            }
 
             /* 画成单选圆点；范围里夹着分隔线没关系 */
             CheckMenuRadioItem(hDelay, IDM_DELAY_NOW, IDM_DELAY_30,
@@ -2219,7 +2245,17 @@ static void UpdateLockTimer(void)
     if (g_pendingScreenOff || g_pendingLidClose)
     {
         /* 同一个 ID 再 SetTimer 就是重新计时，所以总是按当前档位走 */
-        SetTimer(g_hWnd, TIMER_LOCK_DELAY, g_lockDelay * 1000u, NULL);
+        if (SetTimer(g_hWnd, TIMER_LOCK_DELAY, g_lockDelay * 1000u, NULL) == 0)
+        {
+            /* 计时器起不来（句柄无效、定时器耗尽）就直接锁，
+               别把这一次等待整个丢掉 */
+            g_pendingScreenOff = FALSE;
+            g_pendingLidClose  = FALSE;
+            g_lockTimerArmed   = FALSE;
+            LockWorkStation();
+            return;
+        }
+
         g_lockTimerArmed = TRUE;
     }
     else if (g_lockTimerArmed)
@@ -2249,11 +2285,15 @@ static void CancelLidLock(void)
     }
 }
 
-/*
- * 命中一次“该锁屏了”：没设延迟就立刻锁，否则记下待定并起计时。
- * fromScreen 为 TRUE 表示来自关屏，FALSE 表示来自合盖。
- */
-static void RequestLock(BOOL fromScreen)
+/* 待定锁定的来源 */
+typedef enum
+{
+    LOCK_SOURCE_SCREEN = 0,     /* 屏幕被关掉 */
+    LOCK_SOURCE_LID             /* 盖子被合上 */
+} LockSource;
+
+/* 命中一次“该锁屏了”：没设延迟就立刻锁，否则记下待定并起计时 */
+static void RequestLock(LockSource source)
 {
     if (g_lockDelay == 0)
     {
@@ -2261,7 +2301,7 @@ static void RequestLock(BOOL fromScreen)
         return;
     }
 
-    if (fromScreen)
+    if (source == LOCK_SOURCE_SCREEN)
         g_pendingScreenOff = TRUE;
     else
         g_pendingLidClose  = TRUE;
@@ -2308,7 +2348,7 @@ static void OnDisplayStateChanged(DWORD newState)
     if (prevState == DISPLAY_STATE_OFF || !g_lockOnScreenOff)
         return;
 
-    RequestLock(TRUE);
+    RequestLock(LOCK_SOURCE_SCREEN);
 }
 
 /* ---------------------------------------------------------------------------
@@ -2333,7 +2373,7 @@ static void OnLidStateChanged(DWORD newState)
     if (prevState == LID_STATE_CLOSED || !g_lockOnLidClose)
         return;
 
-    RequestLock(FALSE);
+    RequestLock(LOCK_SOURCE_LID);
 }
 
 /* ---------------------------------------------------------------------------

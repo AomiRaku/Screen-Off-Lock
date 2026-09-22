@@ -82,7 +82,6 @@ if (-not (Test-Path $DistDir)) {
 Write-Step '编译资源 src\app.rc'
 
 $WindresExe   = Join-Path (Split-Path -Parent $gxx.FullName) 'windres.exe'
-$ResourceFile = Join-Path $Root 'src\app.rc'
 $ResourceObj  = Join-Path $Root 'build\app_res.o'
 $BuildDir     = Join-Path $Root 'build'
 
@@ -91,8 +90,19 @@ if (-not (Test-Path $BuildDir)) {
 }
 
 if (Test-Path $WindresExe) {
-    & $WindresExe -I (Join-Path $Root 'src') -i $ResourceFile -o $ResourceObj
-    if ($LASTEXITCODE -ne 0) { throw "资源编译失败（退出码 $LASTEXITCODE）。" }
+    # windres 会把 -I 的路径原样拼进它内部调起的预处理命令行，路径里带空格就会被
+    # 截断（报 "'E:\xxx' is not recognized as an internal or external command"）。
+    # 所以先切到仓库根目录，只给 windres 传相对路径。
+    Push-Location $Root
+    try {
+        & $WindresExe -I src -i 'src\app.rc' -o 'build\app_res.o'
+        $ResourceExit = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
+
+    if ($ResourceExit -ne 0) { throw "资源编译失败（退出码 $ResourceExit）。" }
 } else {
     Write-Warning '找不到 windres.exe，将生成不带图标与版本信息的 exe。'
     $ResourceObj = $null
