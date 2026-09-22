@@ -1,8 +1,8 @@
-# ScreenOff Lock
+<h1 align="center">ScreenOff Lock</h1>
 
-**English** | [简体中文](README.md)
+<p align="center"><b>English</b> | <a href="README.md">简体中文</a></p>
 
-A Windows program: **locks the screen when the display turns off or the lid is closed.**
+<p align="center">A Windows program: <b>locks the screen when the display turns off or the lid is closed.</b></p>
 
 ---
 ## Quick start

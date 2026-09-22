@@ -1,8 +1,8 @@
-# ScreenOff Lock
+<h1 align="center">ScreenOff Lock</h1>
 
-**简体中文** | [English](README.en.md)
+<p align="center"><b>简体中文</b> | <a href="README.en.md">English</a></p>
 
-一个 Windows 程序：**屏幕被关闭、或者合上盖子时自动锁屏**。
+<p align="center">一个 Windows 程序：<b>屏幕被关闭、或者合上盖子时自动锁屏</b>。</p>
 
 ---
 ## 快速开始
