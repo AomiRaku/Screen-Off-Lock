@@ -25,6 +25,9 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <powrprof.h>       /* GetPwrCapabilities：判断有没有盖子设备 */
+#include <winhttp.h>        /* 检查更新只用到这里的类型与常量，函数运行时再取 */
+#include <string.h>         /* strstr / strchr / memcpy：解析 tag_name 用 */
+#include <stdlib.h>         /* malloc / free：更新说明是动态长度 */
 
 /* ---------------------------------------------------------------------------
  * 应用信息
@@ -35,9 +38,10 @@
  * 无空格的 ScreenOffLock，免得空格在各处惹麻烦。
  */
 #define APP_NAME        L"ScreenOff Lock"
-#define APP_VERSION     L"Build 1400"
-#define APP_AUTHOR      L"Raku Inkyetta 羽梦千景"
+#define APP_VERSION     L"Build 1511"
+#define APP_AUTHOR      L"羽梦千景 Raku Inkyetta"
 #define APP_URL         L"https://github.com/AomiRaku/Screen-Off-Lock"
+#define APP_LICENSE_URL L"https://github.com/AomiRaku/Screen-Off-Lock/blob/main/LICENSE"
 
 /* ---------------------------------------------------------------------------
  * 多语言
@@ -58,6 +62,8 @@ enum
     S_TAGLINE = 0,          /* 关于：一句话说明 */
     S_AUTHOR_FMT,           /* 关于：作者 */
     S_PROJECT_LABEL,        /* 关于：项目地址标签 */
+    S_LICENSE_PREFIX,       /* 关于：许可证一行的前半句 */
+    S_LICENSE_LINK,         /* 关于：许可证链接文字 */
     S_VERSION_FMT,          /* 关于：版本 */
     S_REG_INTRO,            /* 关于：注册表提示第一行 */
     S_REG_OUTRO,            /* 关于：注册表提示最后一行 */
@@ -112,6 +118,22 @@ enum
 
     S_LANG_PROMPT,
 
+    /* 检查更新 */
+    S_BTN_CHECK_UPDATE,
+    S_UPDATE_TITLE,
+    S_UPDATE_CHECKING,
+    S_UPDATE_FOUND,
+    S_UPDATE_LATEST,
+    S_UPDATE_FAILED,
+    S_UPDATE_FOUND_TITLE_FMT,
+    S_UPDATE_FOUND_BODY_FMT,
+    S_UPDATE_REMOTE_FMT,
+    S_UPDATE_IMAGE_NOTE,
+    S_UPDATE_IGNORE,
+    S_BTN_GO_UPDATE,
+    S_BTN_DONE,
+    S_BTN_CLOSE,
+
     S_BTN_OK,
     S_BTN_CANCEL,
 
@@ -128,8 +150,10 @@ static const WCHAR *g_str[LANG_COUNT][S_COUNT] =
     /* ---------------- English ---------------- */
     {
         L"Locks the screen when the display turns off or the lid is closed.",
-        L"Author: %s",
+        L"Made with ♥ By %s",
         L"Project: ",
+        L"Licensed under the ",
+        L"MIT License",
         L"Version %s",
         L"Settings are stored in the registry at",
         L"You can delete them manually if you no longer need them.",
@@ -139,7 +163,7 @@ static const WCHAR *g_str[LANG_COUNT][S_COUNT] =
         L"Lock when lid is closed",
         L"Lock delay",
         L"Run at startup",
-        L"Check settings",
+        L"Power settings",
         L"About",
         L"Exit",
 
@@ -149,7 +173,7 @@ static const WCHAR *g_str[LANG_COUNT][S_COUNT] =
         L"10 seconds",
         L"30 seconds",
 
-        L"Check settings",
+        L"Power settings",
         L"With the current power settings,",
         L"On AC: %s",
         L"On battery: %s",
@@ -178,10 +202,25 @@ static const WCHAR *g_str[LANG_COUNT][S_COUNT] =
         L"All good.",
 
         L"Some features may not work with the current power settings.",
-        L"Click \"Check settings\" in the tray menu for details.",
+        L"Click \"Power settings\" in the tray menu for details.",
         L"Don't show this again",
 
         L"Choose a language",
+
+        L"Check for updates",
+        L"Check for updates",
+        L"Checking for updates...",
+        L"Update available",
+        L"You already have the latest version.",
+        L"Update check failed. Please check your network and try again.",
+        L"New version available: Build %u",
+        L"You are running Build %u.",
+        L"Latest: Build %u",
+        L"See the release page for images",
+        L"Skip this version",
+        L"Get update",
+        L"Done",
+        L"Close",
 
         L"OK",
         L"Cancel",
@@ -195,8 +234,10 @@ static const WCHAR *g_str[LANG_COUNT][S_COUNT] =
     /* ---------------- 简体中文 ---------------- */
     {
         L"屏幕被关闭或合盖时自动锁屏。",
-        L"作者：%s",
+        L"Made with ♥ By %s",
         L"项目地址：",
+        L"本项目采用 ",
+        L"MIT 协议",
         L"版本 %s",
         L"设置保存在注册表",
         L"不再使用时可手动删除。",
@@ -206,7 +247,7 @@ static const WCHAR *g_str[LANG_COUNT][S_COUNT] =
         L"合盖锁屏",
         L"延迟锁定",
         L"开机启动",
-        L"检查设置",
+        L"电源设置",
         L"关于",
         L"退出",
 
@@ -216,7 +257,7 @@ static const WCHAR *g_str[LANG_COUNT][S_COUNT] =
         L"10 秒",
         L"30 秒",
 
-        L"检查设置",
+        L"电源设置",
         L"当前电脑设置下，",
         L"插电时：%s",
         L"电池时：%s",
@@ -245,10 +286,25 @@ static const WCHAR *g_str[LANG_COUNT][S_COUNT] =
         L"设置正常。",
 
         L"检测到当前电脑设置可能无法使用全部功能。",
-        L"请点击托盘菜单的“检查设置”来查看。",
+        L"请点击托盘菜单的“电源设置”来查看。",
         L"不再显示",
 
         L"选择语言",
+
+        L"检查更新",
+        L"检查更新",
+        L"正在检查更新…",
+        L"发现更新",
+        L"当前已是最新",
+        L"更新检查失败，请检查网络情况重试",
+        L"发现新版本：Build %u",
+        L"当前版本：Build %u",
+        L"最新版本：Build %u",
+        L"请前往更新页面查看图片",
+        L"忽略当前版本",
+        L"前往更新",
+        L"完成",
+        L"关闭",
 
         L"确定",
         L"取消",
@@ -278,6 +334,7 @@ static LangId g_lang = LANG_ZH;
 #define IDM_AUTOSTART   1004
 #define IDM_ABOUT       1005
 #define IDM_EXIT        1006
+#define IDM_UPDATE_CHECK 1007
 
 /* 延迟锁定子菜单：ID 连续，方便用 CheckMenuRadioItem 画单选圆点 */
 #define IDM_DELAY_NOW   1010
@@ -291,6 +348,7 @@ static LangId g_lang = LANG_ZH;
 #define REG_VALUE_LID      L"LockWhenLidClosed"
 #define REG_VALUE_DELAY    L"LockDelay"
 #define REG_VALUE_SKIPWARN L"SkipSettingsWarning"
+#define REG_VALUE_SKIPVER  L"SkippedVersion"
 #define REG_VALUE_LANG     L"Language"
 
 /* 开机启动写在这里；这是系统原有的键，我们只增删自己那一个值 */
@@ -856,13 +914,15 @@ static void RemoveTrayIcon(void)
 #define ABOUT_CLASS     L"ScreenOffLock_AboutWindow"
 #define IDC_ABOUT_OK    2001
 #define IDC_ABOUT_LANG  2002
+#define IDC_ABOUT_UPDATE 2003
 #define GLYPH_INFO      0xE946      /* Segoe Fluent Icons: ⓘ */
 
-#define ABOUT_CX        500         /* 客户区逻辑宽度：要放得下 Run 键那行长路径 */
+#define ABOUT_CX        640         /* 客户区逻辑宽度：要放得下 Run 键那行长路径 */
 #define ABOUT_CY        340
 
 static HWND  g_hAboutWnd    = NULL;
 static BOOL  g_aboutLinkHot = FALSE;    /* 鼠标是否悬在“项目地址”链接上 */
+static BOOL  g_aboutLicenseHot = FALSE; /* 鼠标是否悬在“许可证”链接上 */
 static UINT  g_uiDpi        = 96;       /* 全局 UI DPI，所有自绘对话框共用 */
 static HFONT g_fontTitle = NULL;
 static HFONT g_fontBody  = NULL;
@@ -872,7 +932,11 @@ static HFONT g_fontGlyphSm = NULL;      /* 小号状态图标（对勾 / 感叹�
 
 /* 下面这些在文件靠后定义，但前面的窗口过程要先引用，这里提前声明 */
 static int  TextWidth(HDC hdc, HFONT font, const WCHAR *text);
+static int  InfoPanelHeightLog(HDC hdc, const WCHAR *text, int cxLog);
+static int  DrawInfoPanel(HDC hdc, const WCHAR *text, int x, int y, int cx);
+static void DrawInfoPanelFrame(HDC hdc, int x, int y, int cx, int cy);
 static void ShowLanguageWindow(BOOL modal);
+static void ShowUpdateCheckWindow(void);
 static HWND g_hCheckWnd;
 
 /* 逻辑像素（96 DPI 基准）-> 实际像素 */
@@ -1043,25 +1107,94 @@ static void AboutText(HDC hdc, HFONT font, COLORREF color,
     SelectObject(hdc, hOld);
 }
 
-/* 关于窗口里那条链接的位置（实际像素），绘制与命中测试共用 */
-static void AboutLinkRect(HWND hWnd, RECT *out)
-{
-    const WCHAR *label = T(S_PROJECT_LABEL);
-    HDC   hdc     = GetDC(hWnd);
-    HFONT hOld    = (HFONT)SelectObject(hdc, g_fontBody);
-    SIZE  szLabel = { 0, 0 };
-    SIZE  szLink  = { 0, 0 };
+/* 「关于」窗口里各行的纵向位置（逻辑像素） */
+#define ABOUT_TAGLINE_Y  100            /* 一句话说明 */
+#define ABOUT_AUTHOR_Y   136            /* 作者（和上面那行拉开一点） */
+#define ABOUT_PROJECT_Y  159            /* 项目地址 */
+#define ABOUT_LICENSE_Y  182            /* 许可证（这三行彼此收紧一点） */
 
-    GetTextExtentPoint32W(hdc, label, lstrlenW(label), &szLabel);
-    GetTextExtentPoint32W(hdc, APP_URL, lstrlenW(APP_URL), &szLink);
+/*
+ * 「关于」里“标签 + 可点击链接”那一行的链接位置（实际像素），
+ * 绘制和命中测试共用同一套算法，免得两边对不上。
+ */
+static void AboutLinkRectAt(HWND hWnd, const WCHAR *prefix, const WCHAR *link,
+                            int yLogic, RECT *out)
+{
+    HDC    hdc     = GetDC(hWnd);
+    HFONT  hOld    = (HFONT)SelectObject(hdc, g_fontBody);
+    SIZE   szLabel = { 0, 0 };
+    SIZE   szLink  = { 0, 0 };
+
+    GetTextExtentPoint32W(hdc, prefix, lstrlenW(prefix), &szLabel);
+    GetTextExtentPoint32W(hdc, link,   lstrlenW(link),   &szLink);
 
     SelectObject(hdc, hOld);
     ReleaseDC(hWnd, hdc);
 
     out->left   = AS(28) + szLabel.cx;
-    out->top    = AS(118);
+    out->top    = AS(yLogic - 6);
     out->right  = out->left + szLink.cx;
-    out->bottom = AS(148);
+    out->bottom = AS(yLogic + 24);
+}
+
+/* 项目地址那一行的链接位置 */
+static void AboutLinkRect(HWND hWnd, RECT *out)
+{
+    AboutLinkRectAt(hWnd, T(S_PROJECT_LABEL), APP_URL, ABOUT_PROJECT_Y, out);
+}
+
+/* 许可证那一行的链接位置 */
+static void AboutLicenseRect(HWND hWnd, RECT *out)
+{
+    AboutLinkRectAt(hWnd, T(S_LICENSE_PREFIX), T(S_LICENSE_LINK), ABOUT_LICENSE_Y, out);
+}
+
+/* 「关于」里那两行注册表路径：写全称 */
+#define REG_PATH_APP  L"HKEY_CURRENT_USER\\Software\\ScreenOffLock"
+#define REG_PATH_RUN  L"HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run → ScreenOffLock"
+
+#define ABOUT_PANEL_Y    210            /* 注册表块的顶边（逻辑像素） */
+#define ABOUT_REG_LINE_H 20             /* 块里每行的高度 */
+#define ABOUT_REG_LINES  4              /* 四行：说明 + 两条路径 + 结尾 */
+#define ABOUT_REG_PANEL_H (ABOUT_REG_LINES * ABOUT_REG_LINE_H + 24)  /* 上下各留 12 */
+
+/* 「关于」窗口客户区要多高：注册表块的底 + 间距 + 按钮 + 下边距 */
+static int AboutClientHeight(void)
+{
+    return ABOUT_PANEL_Y + ABOUT_REG_PANEL_H + 34 + 32 + 20;
+}
+
+/* 画一行“标签 + 可点击链接”：链接带下划线，悬停时颜色加深 */
+static void AboutDrawLinkLine(HDC hdc, const WCHAR *prefix, const WCHAR *link,
+                              int y, BOOL hot, const RECT *linkRect)
+{
+    HFONT    hOld;
+    HPEN     hPen, hOldPen;
+    RECT     r;
+    COLORREF clrLink = hot ? RGB(0x00, 0x4E, 0x99) : RGB(0x00, 0x5F, 0xB8);
+
+    AboutText(hdc, g_fontBody, GetSysColor(COLOR_WINDOWTEXT), prefix, 28, y, 300);
+
+    hOld = (HFONT)SelectObject(hdc, g_fontBody);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, clrLink);
+
+    r.left   = linkRect->left;
+    r.top    = AS(y);
+    r.right  = linkRect->right + AS(4);
+    r.bottom = r.top + AS(26);
+
+    DrawTextW(hdc, link, -1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+
+    /* 链接下划线 */
+    hPen    = CreatePen(PS_SOLID, 1, clrLink);
+    hOldPen = (HPEN)SelectObject(hdc, hPen);
+    MoveToEx(hdc, linkRect->left, AS(y) + AS(19), NULL);
+    LineTo(hdc, linkRect->right, AS(y) + AS(19));
+    SelectObject(hdc, hOldPen);
+    DeleteObject(hPen);
+
+    SelectObject(hdc, hOld);
 }
 
 static void AboutPaint(HWND hWnd)
@@ -1072,6 +1205,7 @@ static void AboutPaint(HWND hWnd)
     COLORREF    clrText   = GetSysColor(COLOR_WINDOWTEXT);
     COLORREF    clrMuted  = RGB(0x60, 0x5E, 0x5C);
     COLORREF    clrAccent = RGB(0x0F, 0x6C, 0xBD);
+    COLORREF    clrPath   = RGB(0x8A, 0x88, 0x86);   /* 两行注册表路径：比正文淡 */
     HPEN        hPen, hOldPen;
     WCHAR       buf[256];
 
@@ -1120,65 +1254,44 @@ static void AboutPaint(HWND hWnd)
     SelectObject(hdc, hOldPen);
     DeleteObject(hPen);
 
-    /* 正文 */
-    wsprintfW(buf, T(S_AUTHOR_FMT), APP_AUTHOR);
-    AboutText(hdc, g_fontBody, clrText, buf, 28, 100, ABOUT_CX - 56);
-
-    /* 项目地址：纯文本标签 + 可点击的链接 */
-    AboutText(hdc, g_fontBody, clrText, T(S_PROJECT_LABEL), 28, 124, 200);
-    {
-        RECT     lr, r;
-        HFONT    hOld;
-        HPEN     hPen, hOldPen;
-        COLORREF clrLink = g_aboutLinkHot ? RGB(0x00, 0x4E, 0x99)
-                                          : RGB(0x00, 0x5F, 0xB8);
-        int      yUnder;
-
-        AboutLinkRect(hWnd, &lr);
-
-        hOld = (HFONT)SelectObject(hdc, g_fontBody);
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, clrLink);
-
-        r.left   = lr.left;
-        r.top    = AS(124);
-        r.right  = lr.right + AS(4);
-        r.bottom = r.top + AS(26);
-
-        DrawTextW(hdc, APP_URL, -1, &r,
-                  DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
-
-        /* 链接下划线 */
-        yUnder  = AS(124) + AS(19);
-        hPen    = CreatePen(PS_SOLID, 1, clrLink);
-        hOldPen = (HPEN)SelectObject(hdc, hPen);
-        MoveToEx(hdc, lr.left, yUnder, NULL);
-        LineTo(hdc, lr.right, yUnder);
-        SelectObject(hdc, hOldPen);
-        DeleteObject(hPen);
-
-        SelectObject(hdc, hOld);
-    }
-
+    /* 正文：先一句话说明，再作者、项目地址、许可证 */
     AboutText(hdc, g_fontBody, clrText,
               T(S_TAGLINE),
-              28, 164, ABOUT_CX - 56);
+              28, ABOUT_TAGLINE_Y, ABOUT_CX - 56);
 
-    AboutText(hdc, g_fontSmall, clrMuted,
-              T(S_REG_INTRO),
-              28, 190, ABOUT_CX - 56);
+    wsprintfW(buf, T(S_AUTHOR_FMT), APP_AUTHOR);
+    AboutText(hdc, g_fontBody, clrText, buf, 28, ABOUT_AUTHOR_Y, ABOUT_CX - 56);
 
-    AboutText(hdc, g_fontSmall, clrMuted,
-              L"HKEY_CURRENT_USER\\Software\\ScreenOffLock",
-              28, 210, ABOUT_CX - 56);
+    {
+        RECT lr;
 
-    AboutText(hdc, g_fontSmall, clrMuted,
-              L"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run → ScreenOffLock",
-              28, 230, ABOUT_CX - 56);
+        AboutLinkRect(hWnd, &lr);
+        AboutDrawLinkLine(hdc, T(S_PROJECT_LABEL), APP_URL,
+                          ABOUT_PROJECT_Y, g_aboutLinkHot, &lr);
+    }
 
-    AboutText(hdc, g_fontSmall, clrMuted,
-              T(S_REG_OUTRO),
-              28, 250, ABOUT_CX - 56);
+    {
+        RECT lr;
+
+        AboutLicenseRect(hWnd, &lr);
+        AboutDrawLinkLine(hdc, T(S_LICENSE_PREFIX), T(S_LICENSE_LINK),
+                          ABOUT_LICENSE_Y, g_aboutLicenseHot, &lr);
+    }
+
+    /*
+     * 注册表提示整块放进淡灰衬底里，样式和「电源设置」那个块一致。
+     * 四行分开画：中间两行路径是给人照着去用的，颜色压淡一点。
+     */
+    {
+        int y = ABOUT_PANEL_Y + 12;
+
+        DrawInfoPanelFrame(hdc, 28, ABOUT_PANEL_Y, ABOUT_CX - 56, ABOUT_REG_PANEL_H);
+
+        AboutText(hdc, g_fontSmall, clrText, T(S_REG_INTRO), 42, y, ABOUT_CX - 84);
+        AboutText(hdc, g_fontSmall, clrPath, REG_PATH_APP,   42, y + ABOUT_REG_LINE_H,     ABOUT_CX - 84);
+        AboutText(hdc, g_fontSmall, clrPath, REG_PATH_RUN,   42, y + ABOUT_REG_LINE_H * 2, ABOUT_CX - 84);
+        AboutText(hdc, g_fontSmall, clrText, T(S_REG_OUTRO), 42, y + ABOUT_REG_LINE_H * 3, ABOUT_CX - 84);
+    }
 
     EndPaint(hWnd, &ps);
 }
@@ -1226,6 +1339,24 @@ static void CreateAboutButton(HWND hWnd)
 
     if (hBtn != NULL)
         SendMessageW(hBtn, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+
+    /* 「检查更新」摆到最左边 */
+    {
+        HDC hdc = GetDC(hWnd);
+
+        w = TextWidth(hdc, g_fontBody, T(S_BTN_CHECK_UPDATE)) + AS(30);
+        ReleaseDC(hWnd, hdc);
+    }
+
+    x -= (gap + w);
+
+    hBtn = CreateWindowExW(0, L"BUTTON", T(S_BTN_CHECK_UPDATE),
+                           WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                           x, y, w, bh,
+                           hWnd, (HMENU)(INT_PTR)IDC_ABOUT_UPDATE, g_hInstance, NULL);
+
+    if (hBtn != NULL)
+        SendMessageW(hBtn, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
 }
 
 /* Win11 的窗口圆角由 DWM 负责，这里显式要求圆角 */
@@ -1264,40 +1395,40 @@ static LRESULT CALLBACK AboutWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM
         AboutPaint(hWnd);
         return 0;
 
-    /* “项目地址”那一行是可以点的：悬停变手型、颜色加深，点击打开浏览器 */
+    /* 两条链接都是可点的：悬停变手型、颜色加深 */
     case WM_MOUSEMOVE:
         {
-            RECT  lr;
+            RECT  lr, lc;
             POINT pt;
+            BOOL  hotLink, hotLic;
 
             pt.x = (int)(short)LOWORD(lParam);
             pt.y = (int)(short)HIWORD(lParam);
 
             AboutLinkRect(hWnd, &lr);
+            AboutLicenseRect(hWnd, &lc);
 
-            if (PtInRect(&lr, pt))
+            hotLink = PtInRect(&lr, pt);
+            hotLic  = PtInRect(&lc, pt);
+
+            if (hotLink != g_aboutLinkHot)
             {
-                if (!g_aboutLinkHot)
-                {
-                    g_aboutLinkHot = TRUE;
-                    InvalidateRect(hWnd, &lr, FALSE);
-                }
-                SetCursor(LoadCursorW(NULL, IDC_HAND));
+                g_aboutLinkHot = hotLink;
+                InvalidateRect(hWnd, &lr, FALSE);
             }
-            else
+
+            if (hotLic != g_aboutLicenseHot)
             {
-                if (g_aboutLinkHot)
-                {
-                    g_aboutLinkHot = FALSE;
-                    InvalidateRect(hWnd, &lr, FALSE);
-                }
-                SetCursor(LoadCursorW(NULL, IDC_ARROW));
+                g_aboutLicenseHot = hotLic;
+                InvalidateRect(hWnd, &lc, FALSE);
             }
+
+            SetCursor(LoadCursorW(NULL, (hotLink || hotLic) ? IDC_HAND : IDC_ARROW));
         }
         return 0;
 
     case WM_SETCURSOR:
-        if (LOWORD(lParam) == HTCLIENT && g_aboutLinkHot)
+        if (LOWORD(lParam) == HTCLIENT && (g_aboutLinkHot || g_aboutLicenseHot))
         {
             SetCursor(LoadCursorW(NULL, IDC_HAND));
             return TRUE;
@@ -1306,16 +1437,19 @@ static LRESULT CALLBACK AboutWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM
 
     case WM_LBUTTONDOWN:
         {
-            RECT  lr;
+            RECT  lr, lc;
             POINT pt;
 
             pt.x = (int)(short)LOWORD(lParam);
             pt.y = (int)(short)HIWORD(lParam);
 
             AboutLinkRect(hWnd, &lr);
+            AboutLicenseRect(hWnd, &lc);
 
             if (PtInRect(&lr, pt))
                 ShellExecuteW(NULL, L"open", APP_URL, NULL, NULL, SW_SHOWNORMAL);
+            else if (PtInRect(&lc, pt))
+                ShellExecuteW(NULL, L"open", APP_LICENSE_URL, NULL, NULL, SW_SHOWNORMAL);
         }
         return 0;
 
@@ -1324,6 +1458,8 @@ static LRESULT CALLBACK AboutWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM
             DestroyWindow(hWnd);
         else if (LOWORD(wParam) == IDC_ABOUT_LANG)
             ShowLanguageWindow(FALSE);
+        else if (LOWORD(wParam) == IDC_ABOUT_UPDATE)
+            ShowUpdateCheckWindow();
         return 0;
 
     case WM_CLOSE:
@@ -1331,8 +1467,9 @@ static LRESULT CALLBACK AboutWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM
         return 0;
 
     case WM_DESTROY:
-        g_hAboutWnd    = NULL;
-        g_aboutLinkHot = FALSE;
+        g_hAboutWnd        = NULL;
+        g_aboutLinkHot     = FALSE;
+        g_aboutLicenseHot  = FALSE;
         return 0;
 
     default:
@@ -1380,7 +1517,7 @@ static void ShowAboutWindow(void)
     rc.left   = 0;
     rc.top    = 0;
     rc.right  = AS(ABOUT_CX);
-    rc.bottom = AS(ABOUT_CY);
+    rc.bottom = AS(AboutClientHeight());
     AdjustWindowRectEx(&rc, WS_CAPTION | WS_SYSMENU | WS_POPUP, FALSE, 0);
 
     w = rc.right - rc.left;
@@ -1668,7 +1805,7 @@ static void ShowLanguageWindow(BOOL modal)
 }
 
 /* ---------------------------------------------------------------------------
- * 「检查设置」对话框
+ * 「电源设置」对话框
  *
  * 列出插电/电池两种供电模式下电源按钮与合盖的实际取值，给出结论，并提供两个
  * 一键写入推荐值的按钮。
@@ -2152,6 +2289,1574 @@ static void ShowSettingsWarning(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * 检查更新
+ *
+ * 版本号取 APP_VERSION 里 Build 后面那段数字，跟 GitHub 最新 release 的 tag
+ * 比大小（tag 就写成 "1400" 这种纯数字）。
+ *
+ * 网络这层只用 WinHTTP，而且是从 winhttp.dll 里运行时取函数指针——静态导入表
+ * 保持原来那六个系统 DLL 不变。请求跑在工作线程上、结果用 PostMessage 回投，
+ * 免得同步的网络调用把消息循环卡住。
+ *
+ * 启动后静默查一次（最多试 UPDATE_TRY_COUNT 次，全失败就彻底安静）；用户也
+ * 可以在「关于」里手动查，结果显示在窗口上。
+ * ------------------------------------------------------------------------ */
+
+#define UPDATE_API_HOST     L"api.github.com"
+#define UPDATE_API_PATH     L"/repos/AomiRaku/Screen-Off-Lock/releases/latest"
+#define UPDATE_PAGE_URL     L"https://github.com/AomiRaku/Screen-Off-Lock/releases/latest"
+
+#define WM_APP_UPDATE_DONE  (WM_APP + 2)
+
+#define UPDATE_TRY_COUNT    3           /* 启动时最多试几次 */
+#define UPDATE_RETRY_WAIT   3000        /* 两次尝试之间等多久（毫秒） */
+#define UPDATE_TIMEOUT      8000        /* 单次请求的超时（毫秒） */
+
+/* 原子读一个后台线程会写的变量 */
+#define ATOMIC_READ(p)      InterlockedCompareExchange((p), 0, 0)
+
+static void ShowUpdateAvailableWindow(void);
+
+static HWND g_hUpdateWarnWnd = NULL;        /* 启动时那个更新提示窗 */
+static HWND g_hUpdateChkWnd  = NULL;        /* 手动检查更新那个窗口 */
+
+/* --- 从 winhttp.dll 里取函数 ---------------------------------------------
+ * 不静态链接 winhttp，导入表里就不会多出这个 DLL。
+ * ------------------------------------------------------------------------ */
+
+typedef HINTERNET (WINAPI *PFN_WinHttpOpen)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD);
+typedef HINTERNET (WINAPI *PFN_WinHttpConnect)(HINTERNET, LPCWSTR, INTERNET_PORT, DWORD);
+typedef HINTERNET (WINAPI *PFN_WinHttpOpenRequest)(HINTERNET, LPCWSTR, LPCWSTR, LPCWSTR,
+                                                   LPCWSTR, LPCWSTR *, DWORD);
+typedef BOOL (WINAPI *PFN_WinHttpSetOption)(HINTERNET, DWORD, LPVOID, DWORD);
+typedef BOOL (WINAPI *PFN_WinHttpSetTimeouts)(HINTERNET, int, int, int, int);
+typedef BOOL (WINAPI *PFN_WinHttpSendRequest)(HINTERNET, LPCWSTR, DWORD, LPVOID,
+                                              DWORD, DWORD, DWORD_PTR);
+typedef BOOL (WINAPI *PFN_WinHttpReceiveResponse)(HINTERNET, LPVOID);
+typedef BOOL (WINAPI *PFN_WinHttpQueryHeaders)(HINTERNET, DWORD, LPCWSTR, LPVOID,
+                                               LPDWORD, LPDWORD);
+typedef BOOL (WINAPI *PFN_WinHttpReadData)(HINTERNET, LPVOID, DWORD, LPDWORD);
+typedef BOOL (WINAPI *PFN_WinHttpCloseHandle)(HINTERNET);
+
+typedef struct
+{
+    PFN_WinHttpOpen            Open;
+    PFN_WinHttpConnect         Connect;
+    PFN_WinHttpOpenRequest     OpenRequest;
+    PFN_WinHttpSetOption       SetOption;
+    PFN_WinHttpSetTimeouts     SetTimeouts;
+    PFN_WinHttpSendRequest     SendRequest;
+    PFN_WinHttpReceiveResponse ReceiveResponse;
+    PFN_WinHttpQueryHeaders    QueryHeaders;
+    PFN_WinHttpReadData        ReadData;
+    PFN_WinHttpCloseHandle     CloseHandle;
+} WinHttpApi;
+
+/* 取不到全部函数就算不可用；winhttp.dll 保持加载，不再 FreeLibrary */
+static BOOL LoadWinHttp(WinHttpApi *api)
+{
+    HMODULE hLib = LoadLibraryW(L"winhttp.dll");
+
+    if (hLib == NULL)
+        return FALSE;
+
+    api->Open            = (PFN_WinHttpOpen)           (void *)GetProcAddress(hLib, "WinHttpOpen");
+    api->Connect         = (PFN_WinHttpConnect)        (void *)GetProcAddress(hLib, "WinHttpConnect");
+    api->OpenRequest     = (PFN_WinHttpOpenRequest)    (void *)GetProcAddress(hLib, "WinHttpOpenRequest");
+    api->SetOption       = (PFN_WinHttpSetOption)      (void *)GetProcAddress(hLib, "WinHttpSetOption");
+    api->SetTimeouts     = (PFN_WinHttpSetTimeouts)    (void *)GetProcAddress(hLib, "WinHttpSetTimeouts");
+    api->SendRequest     = (PFN_WinHttpSendRequest)    (void *)GetProcAddress(hLib, "WinHttpSendRequest");
+    api->ReceiveResponse = (PFN_WinHttpReceiveResponse)(void *)GetProcAddress(hLib, "WinHttpReceiveResponse");
+    api->QueryHeaders    = (PFN_WinHttpQueryHeaders)   (void *)GetProcAddress(hLib, "WinHttpQueryHeaders");
+    api->ReadData        = (PFN_WinHttpReadData)       (void *)GetProcAddress(hLib, "WinHttpReadData");
+    api->CloseHandle     = (PFN_WinHttpCloseHandle)    (void *)GetProcAddress(hLib, "WinHttpCloseHandle");
+
+    return (api->Open != NULL && api->Connect != NULL && api->OpenRequest != NULL &&
+            api->SetOption != NULL && api->SetTimeouts != NULL && api->SendRequest != NULL &&
+            api->ReceiveResponse != NULL && api->QueryHeaders != NULL &&
+            api->ReadData != NULL && api->CloseHandle != NULL) ? TRUE : FALSE;
+}
+
+/* --- 版本号 --------------------------------------------------------------- */
+
+/* APP_VERSION 里的数字："Build 1400" -> 1400 */
+static DWORD LocalBuildNumber(void)
+{
+    const WCHAR *p    = APP_VERSION;
+    DWORD        v    = 0;
+    BOOL         seen = FALSE;
+
+    while (*p != L'\0')
+    {
+        if (*p >= L'0' && *p <= L'9')
+        {
+            v = v * 10 + (DWORD)(*p - L'0');
+            seen = TRUE;
+        }
+        else if (seen)
+        {
+            break;
+        }
+
+        ++p;
+    }
+
+    return seen ? v : 0;
+}
+
+/* 从 JSON 里抠出 "tag_name":"xxx"。不引 JSON 库，扫一遍就够了 */
+static BOOL ExtractTagName(const char *json, char *out, int outSize)
+{
+    const char *key = "\"tag_name\":\"";
+    const char *p   = strstr(json, key);
+    const char *end;
+
+    if (p == NULL)
+        return FALSE;
+
+    p  += 12;                           /* strlen(key) */
+    end = strchr(p, '"');
+
+    if (end == NULL || (int)(end - p) >= outSize)
+        return FALSE;
+
+    memcpy(out, p, (size_t)(end - p));
+    out[end - p] = '\0';
+    return TRUE;
+}
+
+/* "1400" / "v1400" / "Build 1400" 一律只取第一段连续数字 */
+static DWORD FirstNumberA(const char *s)
+{
+    DWORD v    = 0;
+    BOOL  seen = FALSE;
+
+    while (*s != '\0')
+    {
+        if (*s >= '0' && *s <= '9')
+        {
+            v = v * 10 + (DWORD)(*s - '0');
+            seen = TRUE;
+        }
+        else if (seen)
+        {
+            break;
+        }
+
+        ++s;
+    }
+
+    return seen ? v : 0;
+}
+
+/* --- 更新说明（release 的 body）-----------------------------------------
+ *
+ * API 返回的是 JSON：body 里的换行、引号都是转义过的，所以得真正解码一遍；
+ * 解出来是 Markdown，还得把标记去掉变成纯文本。作者把中英文用一条分割线
+ * （单独一行 ---）分开写，于是按它切两段，再挑语言对应的那段。
+ * ------------------------------------------------------------------------ */
+
+#define BODY_RAW_SIZE   16384       /* 解码后的原始正文 */
+#define BODY_SEG_SIZE   8192        /* 切出来的单语段 */
+
+/* 十六进制四位数，例如 \u4e2d 里的 4e2d */
+static unsigned Hex4(const char *s)
+{
+    unsigned v = 0;
+    int      i;
+
+    for (i = 0; i < 4; ++i)
+    {
+        char     c = s[i];
+        unsigned d;
+
+        if (c >= '0' && c <= '9')      d = (unsigned)(c - '0');
+        else if (c >= 'a' && c <= 'f') d = (unsigned)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') d = (unsigned)(c - 'A' + 10);
+        else break;
+
+        v = (v << 4) | d;
+    }
+
+    return v;
+}
+
+/* 一个码点写成 UTF-8，返回字节数 */
+static int Utf8Encode(unsigned cp, char *out)
+{
+    if (cp < 0x80)
+    {
+        out[0] = (char)cp;
+        return 1;
+    }
+
+    if (cp < 0x800)
+    {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+
+    if (cp < 0x10000)
+    {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+/* 从开引号之后开始解码一段 JSON 字符串，输出 UTF-8 */
+static void JsonDecodeTo(const char *src, char *out, int outSize)
+{
+    int o = 0;
+
+    while (*src != '\0' && *src != '"' && o < outSize - 8)
+    {
+        if (*src != '\\')
+        {
+            out[o++] = *src++;
+            continue;
+        }
+
+        ++src;                          /* 吃掉反斜杠 */
+
+        switch (*src)
+        {
+        case 'n':  out[o++] = '\n'; ++src; break;
+        case 'r':  out[o++] = '\r'; ++src; break;
+        case 't':  out[o++] = '\t'; ++src; break;
+        case 'b':  out[o++] = '\b'; ++src; break;
+        case 'f':  out[o++] = '\f'; ++src; break;
+        case '/':  out[o++] = '/';  ++src; break;
+        case '\\': out[o++] = '\\'; ++src; break;
+        case '"':  out[o++] = '"';  ++src; break;
+
+        case 'u':
+            {
+                unsigned cp = Hex4(src + 1);
+
+                src += 5;               /* 跳过 \uXXXX */
+
+                /* 代理对：高低位拼成一个码点 */
+                if (cp >= 0xD800 && cp <= 0xDBFF && src[0] == '\\' && src[1] == 'u')
+                {
+                    unsigned lo = Hex4(src + 2);
+
+                    if (lo >= 0xDC00 && lo <= 0xDFFF)
+                    {
+                        cp   = 0x10000u + ((cp - 0xD800u) << 10) + (lo - 0xDC00u);
+                        src += 6;
+                    }
+                }
+
+                o += Utf8Encode(cp, out + o);
+            }
+            break;
+
+        default:
+            if (*src == '\0')
+            {
+                out[o] = '\0';
+                return;
+            }
+            out[o++] = *src++;
+            break;
+        }
+    }
+
+    out[o] = '\0';
+}
+
+/* 取出 release 正文并解码；响应里没有这个字段就返回 FALSE */
+static BOOL ExtractReleaseBody(const char *json, char *out, int outSize)
+{
+    const char *key = "\"body\":\"";
+    const char *p   = strstr(json, key);
+
+    out[0] = '\0';
+
+    if (p == NULL)
+        return FALSE;
+
+    JsonDecodeTo(p + strlen(key), out, outSize);
+    return TRUE;
+}
+
+/* 一整行只有 - * _ 且至少三个，就是 Markdown 的分割线 */
+static BOOL IsMdRule(const char *line, int len)
+{
+    int i, n = 0;
+
+    for (i = 0; i < len; ++i)
+    {
+        char c = line[i];
+
+        if (c == ' ' || c == '\t' || c == '\r')
+            continue;
+
+        if (c == '-' || c == '*' || c == '_')
+        {
+            ++n;
+            continue;
+        }
+
+        return FALSE;
+    }
+
+    return (n >= 3) ? TRUE : FALSE;
+}
+
+/* 行首是列表符号（- * + 后面跟空格）时，返回符号后面的偏移 */
+static int SkipListMark(const char *line, int len)
+{
+    if (len >= 2 && (line[0] == '-' || line[0] == '*' || line[0] == '+') && line[1] == ' ')
+        return 2;
+
+    return 0;
+}
+
+/* 把一句提示按当前界面语言写成 UTF-8 塞进缓冲 */
+static void AppendWideAsUtf8(const WCHAR *w, char *out, int outSize, int *used)
+{
+    char tmp[512];
+    int  n = WideCharToMultiByte(CP_UTF8, 0, w, -1, tmp, (int)sizeof(tmp) - 1, NULL, NULL);
+    int  i;
+
+    if (n <= 0)
+        return;
+
+    for (i = 0; i < n - 1 && *used < outSize - 4; ++i)
+        out[(*used)++] = tmp[i];
+}
+
+/*
+ * 把一行 Markdown 变成纯文本，追加进 out。
+ * 只处理写 release 说明常用的那些：标题 #、引用 >、列表符号、强调 ** __ *、
+ * 行内代码 `、链接 [文字](url)。图片这里显示不出来，换成一句提示。
+ */
+static void CleanMdLine(const char *line, int len, const WCHAR *imgNote,
+                        char *out, int outSize, int *used)
+{
+    int i = 0, o = *used;
+    int stars = 0, k;
+
+    while (i < len && (line[i] == ' ' || line[i] == '\t'))
+        ++i;
+
+    /* 标题的 # */
+    if (i < len && line[i] == '#')
+    {
+        while (i < len && line[i] == '#') ++i;
+        while (i < len && line[i] == ' ') ++i;
+    }
+
+    /* 引用的 > */
+    if (i < len && line[i] == '>')
+    {
+        ++i;
+        if (i < len && line[i] == ' ') ++i;
+    }
+
+    /* 列表符号统一成 "- " */
+    k = SkipListMark(line + i, len - i);
+
+    if (k > 0)
+    {
+        if (o < outSize - 4) { out[o++] = '-'; out[o++] = ' '; }
+        i += k;
+    }
+
+    /* 这一行有几个星号：够两个才当强调标记抹掉 */
+    for (k = i; k < len; ++k)
+    {
+        if (line[k] == '*')
+            ++stars;
+    }
+
+    while (i < len && o < outSize - 8)
+    {
+        /* 图片 ![alt](url) */
+        if (line[i] == '!' && i + 1 < len && line[i + 1] == '[')
+        {
+            int j = i + 2;
+
+            while (j < len && line[j] != ']') ++j;
+
+            if (j < len && j + 1 < len && line[j + 1] == '(')
+            {
+                int m = j + 2;
+
+                while (m < len && line[m] != ')') ++m;
+
+                if (m < len)
+                {
+                    if (o < outSize - 4) out[o++] = '[';
+                    AppendWideAsUtf8(imgNote, out, outSize, &o);
+                    if (o < outSize - 4) out[o++] = ']';
+
+                    i = m + 1;
+                    continue;
+                }
+            }
+        }
+
+        /* 链接 [文字](url)：只留文字 */
+        if (line[i] == '[')
+        {
+            int j = i + 1, m;
+
+            while (j < len && line[j] != ']') ++j;
+
+            if (j < len && j + 1 < len && line[j + 1] == '(')
+            {
+                m = j + 2;
+                while (m < len && line[m] != ')') ++m;
+
+                if (m < len)
+                {
+                    int t;
+
+                    for (t = i + 1; t < j && o < outSize - 4; ++t)
+                        out[o++] = line[t];
+
+                    i = m + 1;
+                    continue;
+                }
+            }
+        }
+
+        /* 行内代码 */
+        if (line[i] == '`')
+        {
+            ++i;
+            continue;
+        }
+
+        /* 成对的星号（强调） */
+        if (line[i] == '*' && stars >= 2)
+        {
+            ++i;
+            continue;
+        }
+
+        /* 删除线 ~~ */
+        if (line[i] == '~' && i + 1 < len && line[i + 1] == '~')
+        {
+            i += 2;
+            continue;
+        }
+
+        out[o++] = line[i++];
+    }
+
+    *used = o;
+}
+
+/* 去掉首尾的空行/空白，返回能用的起点 */
+static char *TrimBlank(char *s)
+{
+    char *e;
+
+    while (*s == '\n' || *s == '\r' || *s == ' ' || *s == '\t')
+        ++s;
+
+    e = s + strlen(s);
+
+    while (e > s && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ' || e[-1] == '\t'))
+        --e;
+
+    *e = '\0';
+    return s;
+}
+
+/* 中文字符占可见字符的百分比：用来认哪一段是中文，而不是假设谁在前 */
+static int CjkScore(const char *utf8)
+{
+    int total = 0, cjk = 0;
+
+    while (*utf8 != '\0')
+    {
+        unsigned char c = (unsigned char)*utf8;
+
+        if (c < 0x80)
+        {
+            if (c > ' ')
+                ++total;
+
+            ++utf8;
+        }
+        else if ((c & 0xE0) == 0xC0)
+        {
+            utf8 += 2;
+            ++total;
+        }
+        else if ((c & 0xF0) == 0xE0)
+        {
+            if (c >= 0xE4 && c <= 0xE9)     /* 三字节里 U+4E00~U+9FFF 的头字节 */
+                ++cjk;
+
+            utf8 += 3;
+            ++total;
+        }
+        else if ((c & 0xF8) == 0xF0)
+        {
+            utf8 += 4;
+            ++total;
+        }
+        else
+        {
+            ++utf8;
+        }
+    }
+
+    return (total == 0) ? 0 : (cjk * 100 / total);
+}
+
+static WCHAR *Utf8ToWide(const char *s)
+{
+    WCHAR *w;
+    int    n;
+
+    if (s == NULL || s[0] == '\0')
+        return NULL;
+
+    n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+
+    if (n <= 0)
+        return NULL;
+
+    w = (WCHAR *)malloc((size_t)n * sizeof(WCHAR));
+
+    if (w == NULL)
+        return NULL;
+
+    if (MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n) <= 0)
+    {
+        free(w);
+        return NULL;
+    }
+
+    return w;
+}
+
+/*
+ * 正文切成中英两段：以第一条单独成行的 --- 为界，各段去掉 Markdown 标记，
+ * 再按 CJK 比例判断哪段是中文。返回的两段可能有一个是 NULL。
+ */
+static void SplitReleaseBody(const char *body, WCHAR **outZh, WCHAR **outEn)
+{
+    char       *segA = (char *)malloc(BODY_SEG_SIZE);
+    char       *segB = (char *)malloc(BODY_SEG_SIZE);
+    int         lenA = 0, lenB = 0;
+    BOOL        second = FALSE;
+    const char *p = body;
+    const WCHAR *imgNote = T(S_UPDATE_IMAGE_NOTE);
+
+    *outZh = NULL;
+    *outEn = NULL;
+
+    if (segA == NULL || segB == NULL)
+    {
+        free(segA);
+        free(segB);
+        return;
+    }
+
+    segA[0] = '\0';
+    segB[0] = '\0';
+
+    while (*p != '\0')
+    {
+        const char *eol = p;
+        int         len;
+
+        while (*eol != '\0' && *eol != '\n')
+            ++eol;
+
+        len = (int)(eol - p);
+
+        if (!second && IsMdRule(p, len))
+        {
+            second = TRUE;              /* 分割线之后都算第二段 */
+        }
+        else
+        {
+            char *dst  = second ? segB : segA;
+            int  *used = second ? &lenB : &lenA;
+
+            if (IsMdRule(p, len))
+            {
+                if (*used < BODY_SEG_SIZE - 2)      /* 第二段里再见到就留个空行 */
+                    dst[(*used)++] = '\n';
+            }
+            else
+            {
+                CleanMdLine(p, len, imgNote, dst, BODY_SEG_SIZE, used);
+
+                if (*used < BODY_SEG_SIZE - 2)
+                    dst[(*used)++] = '\n';
+            }
+        }
+
+        p = (*eol == '\0') ? eol : eol + 1;
+    }
+
+    segA[lenA] = '\0';
+    segB[lenB] = '\0';
+
+    if (CjkScore(segA) >= CjkScore(segB))
+    {
+        *outZh = Utf8ToWide(TrimBlank(segA));
+        *outEn = Utf8ToWide(TrimBlank(segB));
+    }
+    else
+    {
+        *outZh = Utf8ToWide(TrimBlank(segB));
+        *outEn = Utf8ToWide(TrimBlank(segA));
+    }
+
+    free(segA);
+    free(segB);
+}
+
+/* --- 拉一次最新 release --------------------------------------------------- */
+
+static BOOL FetchLatestBuild(const WinHttpApi *api, DWORD *outBuild,
+                             char *outBody, int bodySize)
+{
+    HINTERNET hSession, hConnect, hRequest;
+    char      resp[BODY_RAW_SIZE];
+    char      tag[64];
+    DWORD     status = 0, len = sizeof(status), total = 0;
+    BOOL      ok = FALSE;
+
+    *outBuild = 0;
+
+    if (outBody != NULL && bodySize > 0)
+        outBody[0] = '\0';
+
+    hSession = api->Open(L"ScreenOffLock/" APP_VERSION,
+                         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+
+    if (hSession == NULL)
+        return FALSE;
+
+    /* 解析、连接、发送、接收各给个上限，网络卡住时线程不会一直挂着 */
+    api->SetTimeouts(hSession, UPDATE_TIMEOUT, UPDATE_TIMEOUT,
+                     UPDATE_TIMEOUT, UPDATE_TIMEOUT);
+
+    /*
+     * GitHub 已经不吃 TLS 1.0/1.1 了，显式打开 TLS 1.2。注意这个选项必须设在
+     * session 句柄上；设在 request 句柄上只会返回 12018（句柄类型不对）。
+     */
+    {
+        DWORD proto = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+
+        api->SetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS, &proto, sizeof(proto));
+    }
+
+    hConnect = api->Connect(hSession, UPDATE_API_HOST, INTERNET_DEFAULT_HTTPS_PORT, 0);
+
+    if (hConnect != NULL)
+    {
+        hRequest = api->OpenRequest(hConnect, L"GET", UPDATE_API_PATH, NULL,
+                                    WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                    WINHTTP_FLAG_SECURE);
+
+        if (hRequest != NULL)
+        {
+            if (api->SendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                 WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+                api->ReceiveResponse(hRequest, NULL) &&
+                api->QueryHeaders(hRequest,
+                                  WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                  WINHTTP_HEADER_NAME_BY_INDEX,
+                                  &status, &len, WINHTTP_NO_HEADER_INDEX) &&
+                status == 200)
+            {
+                for (;;)
+                {
+                    DWORD read = 0;
+
+                    if (total + 1 >= sizeof(resp))
+                        break;          /* 响应比缓冲大就只认前面这些 */
+
+                    if (!api->ReadData(hRequest, resp + total,
+                                       (DWORD)(sizeof(resp) - total - 1), &read) || read == 0)
+                        break;
+
+                    total += read;
+                }
+
+                resp[total] = '\0';
+
+                if (ExtractTagName(resp, tag, sizeof(tag)))
+                {
+                    *outBuild = FirstNumberA(tag);
+                    ok = (*outBuild != 0) ? TRUE : FALSE;
+                }
+
+                if (outBody != NULL && bodySize > 0)
+                    ExtractReleaseBody(resp, outBody, bodySize);
+            }
+
+            api->CloseHandle(hRequest);
+        }
+
+        api->CloseHandle(hConnect);
+    }
+
+    api->CloseHandle(hSession);
+    return ok;
+}
+
+/* --- 后台线程 ------------------------------------------------------------- */
+
+static volatile LONG g_updateRunning   = 0;     /* 有线程在跑 */
+static volatile LONG g_updateCancel    = 0;     /* 用户取消了，结果作废 */
+static volatile LONG g_updateOk        = 0;     /* 成功拿到远端版本 */
+static volatile LONG g_updateBuild     = 0;     /* 远端 build 号 */
+static HWND          g_updateNotify    = NULL;  /* 结果投给哪个窗口 */
+static BOOL          g_updateRetryMode = FALSE; /* 失败要不要重试 */
+static WCHAR        *g_updateTextZh    = NULL;  /* 更新说明：中文段（已去 Markdown） */
+static WCHAR        *g_updateTextEn    = NULL;  /* 更新说明：英文段 */
+
+/* 当前界面语言对应的那段说明；缺一段就退回另一段 */
+static const WCHAR *CurrentUpdateText(void)
+{
+    if (g_lang == LANG_ZH)
+        return (g_updateTextZh != NULL) ? g_updateTextZh : g_updateTextEn;
+
+    return (g_updateTextEn != NULL) ? g_updateTextEn : g_updateTextZh;
+}
+
+/* 可打断的等待：用户一取消，就不用把这几秒睡完 */
+static void UpdateSleep(DWORD ms)
+{
+    DWORD waited = 0;
+
+    while (waited < ms && ATOMIC_READ(&g_updateCancel) == 0)
+    {
+        Sleep(100);
+        waited += 100;
+    }
+}
+
+static DWORD WINAPI UpdateThreadProc(LPVOID param)
+{
+    WinHttpApi api;
+    char      *rawBody  = (char *)malloc(BODY_RAW_SIZE);
+    WCHAR     *textZh   = NULL;
+    WCHAR     *textEn   = NULL;
+    DWORD      build    = 0;
+    BOOL       ok       = FALSE;
+    int        tries    = 0;
+    int        maxTries = g_updateRetryMode ? UPDATE_TRY_COUNT : 1;
+
+    (void)param;
+
+    if (LoadWinHttp(&api))
+    {
+        while (tries < maxTries)
+        {
+            if (ATOMIC_READ(&g_updateCancel) != 0)
+                break;
+
+            ++tries;
+
+            if (FetchLatestBuild(&api, &build, rawBody, BODY_RAW_SIZE))
+            {
+                ok = TRUE;
+                break;
+            }
+
+            if (tries < maxTries)
+                UpdateSleep(UPDATE_RETRY_WAIT);
+        }
+    }
+
+    /* 说明只在成功那一次解析；失败时留空，免得显示上一次的旧内容 */
+    if (ok && rawBody != NULL)
+        SplitReleaseBody(rawBody, &textZh, &textEn);
+
+    if (rawBody != NULL)
+        free(rawBody);
+
+    {
+        WCHAR *oldZh = (WCHAR *)InterlockedExchangePointer((PVOID volatile *)&g_updateTextZh, textZh);
+        WCHAR *oldEn = (WCHAR *)InterlockedExchangePointer((PVOID volatile *)&g_updateTextEn, textEn);
+
+        if (oldZh != NULL) free(oldZh);
+        if (oldEn != NULL) free(oldEn);
+    }
+
+    InterlockedExchange(&g_updateOk,      ok ? 1 : 0);
+    InterlockedExchange(&g_updateBuild,   (LONG)build);
+    InterlockedExchange(&g_updateRunning, 0);
+
+    if (g_updateNotify != NULL)
+        PostMessageW(g_updateNotify, WM_APP_UPDATE_DONE, 0, 0);
+
+    return 0;
+}
+
+/*
+ * 起一次后台检查。notifyWnd 是结果投给哪个窗口；retryMode 为 TRUE 时失败会按
+ * UPDATE_TRY_COUNT 重试（启动时的静默检查用这个）。已经有线程在跑就只把收件人
+ * 换掉，不重复起线程。
+ */
+static void StartUpdateCheck(HWND notifyWnd, BOOL retryMode)
+{
+    HANDLE hThread;
+
+    g_updateNotify = notifyWnd;
+
+    if (InterlockedCompareExchange(&g_updateRunning, 1, 0) != 0)
+        return;
+
+    InterlockedExchange(&g_updateCancel, 0);
+    g_updateRetryMode = retryMode;
+
+    hThread = CreateThread(NULL, 0, UpdateThreadProc, NULL, 0, NULL);
+
+    if (hThread == NULL)
+    {
+        InterlockedExchange(&g_updateRunning, 0);
+        return;
+    }
+
+    CloseHandle(hThread);               /* 线程自己会跑完，用不着它的句柄 */
+}
+
+/* 启动后静默查一次 */
+static void StartStartupUpdateCheck(void)
+{
+    StartUpdateCheck(g_hWnd, TRUE);
+}
+
+/*
+ * 启动检查的结果：确实有新版本、而且这个版本没被“忽略当前版本”记下过，才弹
+ * 提示。失败、没更新、已经忽略过，都什么都不做。
+ */
+static void OnStartupUpdateResult(void)
+{
+    DWORD remote, skipped;
+
+    if (ATOMIC_READ(&g_updateOk) == 0)
+        return;                         /* 静默失败 */
+
+    remote = (DWORD)ATOMIC_READ(&g_updateBuild);
+
+    if (remote == 0 || remote <= LocalBuildNumber())
+        return;
+
+    /* 记的是被忽略过的那个版本号：线上再出更高的版本时，提示会自己回来 */
+    skipped = LoadDwordSetting(REG_VALUE_SKIPVER, 0);
+
+    if (remote <= skipped)
+        return;
+
+    /* 已经有别的窗口开着就别叠上去，下次启动再说 */
+    if (g_hWarnWnd != NULL || g_hAboutWnd != NULL || g_hUpdateWarnWnd != NULL)
+        return;
+
+    ShowUpdateAvailableWindow();
+}
+
+/* ---------------------------------------------------------------------------
+ * 灰色信息块
+ *
+ * 和「电源设置」里那块一个样式：淡灰圆角衬底 + 小一号的字。
+ * 更新说明长短不定，所以窗口高度得按它的实际行数算出来。
+ * ------------------------------------------------------------------------ */
+
+/* 文本在给定实际宽度下占多高（实际像素）；没有文本就是 0 */
+static int PanelTextHeight(HDC hdc, const WCHAR *text, int cxPhys)
+{
+    RECT  r;
+    HFONT hOld;
+
+    if (text == NULL)
+        return 0;
+
+    r.left   = 0;
+    r.top    = 0;
+    r.right  = cxPhys;
+    r.bottom = 0;
+
+    hOld = (HFONT)SelectObject(hdc, g_fontSmall);
+    DrawTextW(hdc, text, -1, &r, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+    SelectObject(hdc, hOld);
+
+    return r.bottom - r.top;
+}
+
+/* 同样的高度，换算成逻辑像素 */
+static int PanelTextHeightLog(HDC hdc, const WCHAR *text, int cxLog)
+{
+    return MulDiv(PanelTextHeight(hdc, text, AS(cxLog)), 96, (int)g_uiDpi);
+}
+
+/* 只算不画：内容块要占多高（逻辑像素），没有内容返回 0 */
+static int InfoPanelHeightLog(HDC hdc, const WCHAR *text, int cxLog)
+{
+    if (text == NULL || text[0] == L'\0')
+        return 0;
+
+    return PanelTextHeightLog(hdc, text, cxLog - 28) + 24;   /* 上下各留 12 */
+}
+
+/* 把内容块画出来，返回它占掉的高度（逻辑像素） */
+static int DrawInfoPanel(HDC hdc, const WCHAR *text, int x, int y, int cx)
+{
+    HBRUSH hbr, hOldBr;
+    HPEN   hpn, hOldPn;
+    HFONT  hOld;
+    RECT   r;
+    int    cy = InfoPanelHeightLog(hdc, text, cx);
+
+    if (cy == 0)
+        return 0;
+
+    hbr    = CreateSolidBrush(RGB(0xF5, 0xF5, 0xF5));
+    hpn    = CreatePen(PS_SOLID, 1, RGB(0xE8, 0xE8, 0xE8));
+    hOldBr = (HBRUSH)SelectObject(hdc, hbr);
+    hOldPn = (HPEN)SelectObject(hdc, hpn);
+
+    RoundRect(hdc, AS(x), AS(y), AS(x + cx), AS(y + cy), AS(12), AS(12));
+
+    SelectObject(hdc, hOldBr);
+    SelectObject(hdc, hOldPn);
+    DeleteObject(hbr);
+    DeleteObject(hpn);
+
+    r.left   = AS(x + 14);
+    r.top    = AS(y + 12);
+    r.right  = AS(x + cx - 14);
+    r.bottom = AS(y + cy - 12);
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+
+    hOld = (HFONT)SelectObject(hdc, g_fontSmall);
+    DrawTextW(hdc, text, -1, &r, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+    SelectObject(hdc, hOld);
+
+    return cy;
+}
+
+/* 只画灰块的框；高度自己给，文字由调用方按行画 */
+static void DrawInfoPanelFrame(HDC hdc, int x, int y, int cx, int cy)
+{
+    HBRUSH hbr    = CreateSolidBrush(RGB(0xF5, 0xF5, 0xF5));
+    HPEN   hpn    = CreatePen(PS_SOLID, 1, RGB(0xE8, 0xE8, 0xE8));
+    HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hbr);
+    HPEN   hOldPn = (HPEN)SelectObject(hdc, hpn);
+
+    RoundRect(hdc, AS(x), AS(y), AS(x + cx), AS(y + cy), AS(12), AS(12));
+
+    SelectObject(hdc, hOldBr);
+    SelectObject(hdc, hOldPn);
+    DeleteObject(hbr);
+    DeleteObject(hpn);
+}
+
+/* 按客户区逻辑尺寸调整窗口，并保持屏幕居中 */
+static void ResizeDialogCentered(HWND hWnd, int cxLogical, int cyLogical)
+{
+    RECT rc, wa;
+    int  w, h, x, y;
+
+    rc.left   = 0;
+    rc.top    = 0;
+    rc.right  = AS(cxLogical);
+    rc.bottom = AS(cyLogical);
+    AdjustWindowRectEx(&rc, WS_CAPTION | WS_SYSMENU | WS_POPUP, FALSE, 0);
+
+    w = rc.right - rc.left;
+    h = rc.bottom - rc.top;
+
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    x = wa.left + ((wa.right - wa.left) - w) / 2;
+    y = wa.top + ((wa.bottom - wa.top) - h) / 2;
+
+    SetWindowPos(hWnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+/* ---------------------------------------------------------------------------
+ * 启动时的更新提示窗
+ *
+ * 跟“设置提醒”那个窗一个路数：自绘图标 + 文案 + 自绘复选框。勾上
+ * “忽略当前版本”并关掉窗口，就把这次看到的远端版本号记下来，以后不再为
+ * 这个版本提示；等线上出了更高的版本，提示会自己回来。
+ * ------------------------------------------------------------------------ */
+
+#define UPDWARN_CLASS     L"ScreenOffLock_UpdateNotice"
+#define IDC_UPDWARN_GO    2401
+#define IDC_UPDWARN_CLOSE 2402
+
+#define UPDWARN_CX        480
+#define UPDWARN_PANEL_Y   84            /* 内容块从哪儿开始（逻辑像素） */
+
+static BOOL g_updateWarnSkip = FALSE;       /* 勾了“忽略当前版本” */
+static int  g_warnPanelH     = 0;           /* 内容块高度（逻辑像素），0 = 没有内容 */
+static int  g_warnCbY        = 0;           /* 复选框的 y（逻辑像素） */
+
+/* 客户区要多高：复选框 + 间距 + 按钮 + 下边距 */
+static int UpdateWarnClientHeight(void)
+{
+    return g_warnCbY + 20 + 18 + 32 + 18;
+}
+
+/* 按说明文本的长度算好内容块高度和复选框位置 */
+static void UpdateWarnLayout(void)
+{
+    HDC hdc = GetDC(NULL);
+
+    g_warnPanelH = InfoPanelHeightLog(hdc, CurrentUpdateText(), UPDWARN_CX - 56);
+    g_warnCbY    = UPDWARN_PANEL_Y + g_warnPanelH + 14;
+
+    ReleaseDC(NULL, hdc);
+}
+
+static void UpdateWarnPaint(HWND hWnd)
+{
+    PAINTSTRUCT ps;
+    HDC         hdc = BeginPaint(hWnd, &ps);
+    RECT        rc;
+    COLORREF    clrText   = GetSysColor(COLOR_WINDOWTEXT);
+    COLORREF    clrAccent = RGB(0x0F, 0x6C, 0xBD);
+    WCHAR       buf[160];
+
+    GetClientRect(hWnd, &rc);
+    FillRect(hdc, &rc, GetSysColorBrush(COLOR_WINDOW));
+    SetBkMode(hdc, TRANSPARENT);
+
+    if (g_fontGlyph != NULL)
+    {
+        HFONT hOld = (HFONT)SelectObject(hdc, g_fontGlyph);
+        RECT  r;
+
+        SetTextColor(hdc, clrAccent);
+        r.left   = AS(28);
+        r.top    = AS(26);
+        r.right  = AS(28 + 40);
+        r.bottom = AS(26 + 40);
+
+        DrawTextW(hdc, L"\xE946", -1, &r,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+        SelectObject(hdc, hOld);
+    }
+
+    wsprintfW(buf, T(S_UPDATE_FOUND_TITLE_FMT), (DWORD)ATOMIC_READ(&g_updateBuild));
+    AboutText(hdc, g_fontBody, clrText, buf, 80, 28, UPDWARN_CX - 108);
+
+    wsprintfW(buf, T(S_UPDATE_FOUND_BODY_FMT), LocalBuildNumber());
+    AboutText(hdc, g_fontSmall, RGB(0x60, 0x5E, 0x5C), buf, 80, 54, UPDWARN_CX - 108);
+
+    /* 更新说明（挑当前语言那一段），放在淡灰衬底里 */
+    if (g_warnPanelH > 0)
+        DrawInfoPanel(hdc, CurrentUpdateText(), 28, UPDWARN_PANEL_Y, UPDWARN_CX - 56);
+
+    DrawCheckbox(hdc, AS(28), AS(g_warnCbY), AS(20), g_updateWarnSkip);
+    AboutText(hdc, g_fontBody, clrText, T(S_UPDATE_IGNORE), 58, g_warnCbY + 2, 260);
+
+    EndPaint(hWnd, &ps);
+}
+
+static void CreateUpdateWarnControls(HWND hWnd)
+{
+    HDC  hdc = GetDC(hWnd);
+    RECT rc;
+    HWND hCtl;
+    int  bh = AS(32), gap = AS(10), y, x, wGo, wClose;
+
+    GetClientRect(hWnd, &rc);
+
+    wGo    = TextWidth(hdc, g_fontBody, T(S_BTN_GO_UPDATE)) + AS(36);
+    wClose = TextWidth(hdc, g_fontBody, T(S_BTN_CLOSE))     + AS(36);
+
+    y = rc.bottom - AS(18) - bh;
+
+    /* 「关闭」在最右 */
+    x = rc.right - AS(24) - wClose;
+
+    hCtl = CreateWindowExW(0, L"BUTTON", T(S_BTN_CLOSE),
+                           WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                           x, y, wClose, bh, hWnd,
+                           (HMENU)(INT_PTR)IDC_UPDWARN_CLOSE, g_hInstance, NULL);
+    if (hCtl != NULL)
+        SendMessageW(hCtl, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+
+    /* 「前往更新」在它左边，作为默认按钮 */
+    x -= (gap + wGo);
+
+    hCtl = CreateWindowExW(0, L"BUTTON", T(S_BTN_GO_UPDATE),
+                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                           x, y, wGo, bh, hWnd,
+                           (HMENU)(INT_PTR)IDC_UPDWARN_GO, g_hInstance, NULL);
+    if (hCtl != NULL)
+    {
+        SendMessageW(hCtl, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+        SetFocus(hCtl);
+    }
+
+    ReleaseDC(hWnd, hdc);
+}
+
+static LRESULT CALLBACK UpdateWarnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    switch (uMsg)
+    {
+    case WM_CREATE:
+        CreateAboutFonts();
+        g_updateWarnSkip = FALSE;
+        CreateUpdateWarnControls(hWnd);
+        ApplyRoundCorners(hWnd);
+        return 0;
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    /* 让复选框的背景跟窗口的白色一致，否则会露出一块系统灰 */
+    case WM_CTLCOLORBTN:
+        SetBkColor((HDC)wParam, GetSysColor(COLOR_WINDOW));
+        return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+
+    case WM_PAINT:
+        UpdateWarnPaint(hWnd);
+        return 0;
+
+    case WM_LBUTTONDOWN:
+        {
+            int mx = (int)(short)LOWORD(lParam);
+            int my = (int)(short)HIWORD(lParam);
+            int bx = AS(28), by = AS(g_warnCbY), bs = AS(20), pad = AS(6);
+
+            /* 点方框本身或右边的文字都算 */
+            if (mx >= bx - pad && mx <= bx + bs + AS(160) &&
+                my >= by - pad && my <= by + bs + pad)
+            {
+                g_updateWarnSkip = !g_updateWarnSkip;
+                InvalidateRect(hWnd, NULL, FALSE);
+            }
+        }
+        return 0;
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDC_UPDWARN_GO)
+        {
+            ShellExecuteW(NULL, L"open", UPDATE_PAGE_URL, NULL, NULL, SW_SHOWNORMAL);
+            DestroyWindow(hWnd);
+        }
+        else if (LOWORD(wParam) == IDC_UPDWARN_CLOSE)
+        {
+            DestroyWindow(hWnd);
+        }
+        return 0;
+
+    case WM_CLOSE:
+        DestroyWindow(hWnd);
+        return 0;
+
+    case WM_DESTROY:
+        /* 勾了“忽略当前版本”就把这个远端版本号记下来；从哪条路关的都算数 */
+        if (g_updateWarnSkip)
+            SaveDwordSetting(REG_VALUE_SKIPVER, (DWORD)ATOMIC_READ(&g_updateBuild));
+
+        g_hUpdateWarnWnd = NULL;
+        return 0;
+
+    default:
+        break;
+    }
+
+    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+}
+
+static void ShowUpdateAvailableWindow(void)
+{
+    WNDCLASSEXW wc;
+    HWND        hWnd;
+
+    if (g_hUpdateWarnWnd != NULL)
+    {
+        SetForegroundWindow(g_hUpdateWarnWnd);
+        return;
+    }
+
+    SetupDialogClass(&wc, UpdateWarnWndProc, UPDWARN_CLASS);
+
+    g_uiDpi = QueryDpi(g_hWnd);
+    UpdateWarnLayout();
+
+    hWnd = CreateCenteredDialog(UPDWARN_CLASS, APP_NAME,
+                                UPDWARN_CX, UpdateWarnClientHeight(),
+                                WS_CAPTION | WS_SYSMENU | WS_POPUP);
+
+    if (hWnd == NULL)
+        return;
+
+    g_hUpdateWarnWnd = hWnd;
+
+    ShowWindow(hWnd, SW_SHOW);
+    UpdateWindow(hWnd);
+    SetForegroundWindow(hWnd);
+}
+
+/* ---------------------------------------------------------------------------
+ * 手动检查更新窗口
+ *
+ * 一个窗口走完整个过程：先显示“正在检查更新”，结果回来后就地变成
+ * “发现更新 / 当前已是最新 / 更新检查失败”，按钮文字和动作跟着换。
+ * ------------------------------------------------------------------------ */
+
+#define UPDCHK_CLASS      L"ScreenOffLock_UpdateCheck"
+#define IDC_UPDCHK_ACTION 2501
+
+#define UPDCHK_CX         480           /* 和启动时的提示窗同宽 */
+#define UPDCHK_PANEL_Y    84            /* 内容块从哪儿开始（逻辑像素） */
+
+typedef enum
+{
+    UPDCHK_CHECKING = 0,
+    UPDCHK_FOUND,
+    UPDCHK_LATEST,
+    UPDCHK_FAILED
+} UpdateCheckState;
+
+static UpdateCheckState g_updateChkState = UPDCHK_CHECKING;
+static int              g_chkPanelH      = 0;   /* 内容块高度（逻辑像素） */
+
+/* 只有“发现更新”才有说明可显示 */
+static const WCHAR *UpdateCheckPanelText(void)
+{
+    return (g_updateChkState == UPDCHK_FOUND) ? CurrentUpdateText() : NULL;
+}
+
+/* 文字区占到哪一行：标题下面那一行是当前版本，其余状态只有标题 */
+static int UpdateCheckTextBottom(void)
+{
+    switch (g_updateChkState)
+    {
+    case UPDCHK_FOUND:
+    case UPDCHK_LATEST: return 80;
+    default:            return 74;
+    }
+}
+
+/* 客户区要多高 */
+static int UpdateCheckClientHeight(void)
+{
+    int bottom = UpdateCheckTextBottom();
+
+    if (g_chkPanelH > 0)
+        bottom = UPDCHK_PANEL_Y + g_chkPanelH;      /* 一直算到内容块底 */
+
+    return bottom + 16 + 32 + 18;
+}
+
+/* 按钮靠右下角，和启动时那个提示窗摆法一致 */
+static void UpdateCheckPlaceButton(HWND hWnd)
+{
+    HWND hBtn = GetDlgItem(hWnd, IDC_UPDCHK_ACTION);
+    RECT rc, br;
+    int  bw;
+
+    if (hBtn == NULL)
+        return;
+
+    GetClientRect(hWnd, &rc);
+    GetWindowRect(hBtn, &br);
+    bw = br.right - br.left;
+
+    SetWindowPos(hBtn, NULL,
+                 rc.right - AS(24) - bw, rc.bottom - AS(18) - AS(32),
+                 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+/* 说明有没有、窗口就多高：状态一变就重排一次 */
+static void UpdateCheckRelayout(HWND hWnd)
+{
+    HDC hdc = GetDC(hWnd);
+
+    g_chkPanelH = InfoPanelHeightLog(hdc, UpdateCheckPanelText(), UPDCHK_CX - 56);
+    ReleaseDC(hWnd, hdc);
+
+    ResizeDialogCentered(hWnd, UPDCHK_CX, UpdateCheckClientHeight());
+    UpdateCheckPlaceButton(hWnd);
+}
+
+static void UpdateCheckActionText(HWND hWnd)
+{
+    HWND         hBtn = GetDlgItem(hWnd, IDC_UPDCHK_ACTION);
+    const WCHAR *text;
+
+    switch (g_updateChkState)
+    {
+    case UPDCHK_FOUND:  text = T(S_BTN_GO_UPDATE); break;
+    case UPDCHK_LATEST: text = T(S_BTN_DONE);      break;
+    case UPDCHK_FAILED: text = T(S_BTN_CLOSE);     break;
+    default:            text = T(S_BTN_CANCEL);    break;
+    }
+
+    if (hBtn != NULL)
+    {
+        SetWindowTextW(hBtn, text);
+        InvalidateRect(hBtn, NULL, TRUE);
+    }
+}
+
+static void UpdateCheckSetState(HWND hWnd, UpdateCheckState state)
+{
+    g_updateChkState = state;
+    UpdateCheckActionText(hWnd);
+    UpdateCheckRelayout(hWnd);          /* 说明有没有、窗口就跟着变高变矮 */
+    InvalidateRect(hWnd, NULL, FALSE);
+}
+
+static void UpdateCheckPaint(HWND hWnd)
+{
+    PAINTSTRUCT  ps;
+    HDC          hdc = BeginPaint(hWnd, &ps);
+    RECT         rc, r;
+    HFONT        hOld;
+    const WCHAR *msg;
+    WCHAR        buf[96];
+
+    GetClientRect(hWnd, &rc);
+    FillRect(hdc, &rc, GetSysColorBrush(COLOR_WINDOW));
+    SetBkMode(hdc, TRANSPARENT);
+
+    switch (g_updateChkState)
+    {
+    case UPDCHK_FOUND:                      /* 标题直接带新版本号，和启动提示窗一字不差 */
+        wsprintfW(buf, T(S_UPDATE_FOUND_TITLE_FMT), (DWORD)ATOMIC_READ(&g_updateBuild));
+        msg = buf;
+        break;
+
+    case UPDCHK_LATEST: msg = T(S_UPDATE_LATEST);    break;
+    case UPDCHK_FAILED: msg = T(S_UPDATE_FAILED);    break;
+    default:            msg = T(S_UPDATE_CHECKING);  break;
+    }
+
+    /* 版式和启动时的更新提示窗一致：左边一个图标，文字都左对齐 */
+    if (g_fontGlyph != NULL)
+    {
+        HFONT hOldGlyph = (HFONT)SelectObject(hdc, g_fontGlyph);
+        RECT  ri;
+
+        SetTextColor(hdc, RGB(0x0F, 0x6C, 0xBD));
+
+        ri.left   = AS(28);
+        ri.top    = AS(26);
+        ri.right  = AS(28 + 40);
+        ri.bottom = AS(26 + 40);
+
+        DrawTextW(hdc, L"\xE946", -1, &ri,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+        SelectObject(hdc, hOldGlyph);
+    }
+
+    hOld = (HFONT)SelectObject(hdc, g_fontBody);
+    SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+
+    r.left   = AS(80);
+    r.top    = AS(28);
+    r.right  = rc.right - AS(28);
+    r.bottom = r.top + AS(46);
+
+    DrawTextW(hdc, msg, -1, &r,
+              DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+
+    SelectObject(hdc, hOld);
+
+    if (g_updateChkState == UPDCHK_FOUND || g_updateChkState == UPDCHK_LATEST)
+    {
+        hOld = (HFONT)SelectObject(hdc, g_fontSmall);
+        SetTextColor(hdc, RGB(0x60, 0x5E, 0x5C));
+
+        /* 当前版本：两种状态都写在标题下面那一行 */
+        wsprintfW(buf, T(S_UPDATE_FOUND_BODY_FMT), LocalBuildNumber());
+
+        r.top    = AS(56);
+        r.bottom = r.top + AS(24);
+
+        DrawTextW(hdc, buf, -1, &r,
+                  DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+
+        SelectObject(hdc, hOld);
+
+        /* 再下面是更新说明，放在淡灰衬底里 */
+        if (g_updateChkState == UPDCHK_FOUND && g_chkPanelH > 0)
+            DrawInfoPanel(hdc, CurrentUpdateText(), 28, UPDCHK_PANEL_Y, UPDCHK_CX - 56);
+    }
+
+    EndPaint(hWnd, &ps);
+}
+
+static void CreateUpdateCheckControls(HWND hWnd)
+{
+    HWND hCtl;
+    HDC  hdc = GetDC(hWnd);
+    int  bh = AS(32), bw;
+
+    /* 宽度跟着四态里最长的那个按钮文字走，再留一点内边距 */
+    bw = TextWidth(hdc, g_fontBody, T(S_BTN_GO_UPDATE));
+    {
+        int w;
+
+        w = TextWidth(hdc, g_fontBody, T(S_BTN_CANCEL));
+        if (w > bw) bw = w;
+
+        w = TextWidth(hdc, g_fontBody, T(S_BTN_DONE));
+        if (w > bw) bw = w;
+
+        w = TextWidth(hdc, g_fontBody, T(S_BTN_CLOSE));
+        if (w > bw) bw = w;
+    }
+
+    ReleaseDC(hWnd, hdc);
+
+    bw += AS(36);
+
+    /* 位置先随便给，随后由 UpdateCheckPlaceButton 居中贴底 */
+    hCtl = CreateWindowExW(0, L"BUTTON", L"",
+                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                           0, 0, bw, bh, hWnd,
+                           (HMENU)(INT_PTR)IDC_UPDCHK_ACTION, g_hInstance, NULL);
+    if (hCtl != NULL)
+    {
+        SendMessageW(hCtl, WM_SETFONT, (WPARAM)g_fontBody, TRUE);
+        SetFocus(hCtl);
+    }
+
+    UpdateCheckPlaceButton(hWnd);
+}
+
+static LRESULT CALLBACK UpdateCheckWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    switch (uMsg)
+    {
+    case WM_CREATE:
+        CreateAboutFonts();
+        g_updateChkState = UPDCHK_CHECKING;
+        CreateUpdateCheckControls(hWnd);
+        UpdateCheckActionText(hWnd);
+        ApplyRoundCorners(hWnd);
+
+        /* 启动那次检查还在跑就直接等它的结果，否则现在起一个 */
+        if (ATOMIC_READ(&g_updateRunning) != 0)
+            g_updateNotify = hWnd;
+        else
+            StartUpdateCheck(hWnd, FALSE);
+        return 0;
+
+    case WM_APP_UPDATE_DONE:
+        /* 用户已经按过“取消”就什么都不改 */
+        if (ATOMIC_READ(&g_updateCancel) == 0)
+        {
+            if (ATOMIC_READ(&g_updateOk) == 0)
+                UpdateCheckSetState(hWnd, UPDCHK_FAILED);
+            else if ((DWORD)ATOMIC_READ(&g_updateBuild) > LocalBuildNumber())
+                UpdateCheckSetState(hWnd, UPDCHK_FOUND);
+            else
+                UpdateCheckSetState(hWnd, UPDCHK_LATEST);
+        }
+        return 0;
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_PAINT:
+        UpdateCheckPaint(hWnd);
+        return 0;
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDC_UPDCHK_ACTION)
+        {
+            switch (g_updateChkState)
+            {
+            case UPDCHK_FOUND:          /* 前往更新 */
+                ShellExecuteW(NULL, L"open", UPDATE_PAGE_URL, NULL, NULL, SW_SHOWNORMAL);
+                DestroyWindow(hWnd);
+                break;
+
+            case UPDCHK_CHECKING:       /* 取消：这次结果不要了 */
+                InterlockedExchange(&g_updateCancel, 1);
+                DestroyWindow(hWnd);
+                break;
+
+            default:                    /* 已是最新 / 检查失败 */
+                DestroyWindow(hWnd);
+                break;
+            }
+        }
+        return 0;
+
+    case WM_CLOSE:
+        if (g_updateChkState == UPDCHK_CHECKING)
+            InterlockedExchange(&g_updateCancel, 1);
+
+        DestroyWindow(hWnd);
+        return 0;
+
+    case WM_DESTROY:
+        g_hUpdateChkWnd = NULL;
+
+        /* 结果别再投给一个已经没了的窗口 */
+        if (g_updateNotify == hWnd)
+            g_updateNotify = NULL;
+        return 0;
+
+    default:
+        break;
+    }
+
+    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+}
+
+static void ShowUpdateCheckWindow(void)
+{
+    WNDCLASSEXW wc;
+    HWND        hWnd;
+
+    if (g_hUpdateChkWnd != NULL)        /* 已经开着就置前 */
+    {
+        SetForegroundWindow(g_hUpdateChkWnd);
+        return;
+    }
+
+    SetupDialogClass(&wc, UpdateCheckWndProc, UPDCHK_CLASS);
+
+    g_uiDpi = QueryDpi(g_hWnd);
+    g_chkPanelH = 0;                    /* 新窗口先从“正在检查”的小尺寸开始 */
+
+    hWnd = CreateCenteredDialog(UPDCHK_CLASS, T(S_UPDATE_TITLE),
+                                UPDCHK_CX, UpdateCheckClientHeight(),
+                                WS_CAPTION | WS_SYSMENU | WS_POPUP);
+
+    if (hWnd == NULL)
+        return;
+
+    g_hUpdateChkWnd = hWnd;
+
+    ShowWindow(hWnd, SW_SHOW);
+    UpdateWindow(hWnd);
+    SetForegroundWindow(hWnd);
+}
+
+/* ---------------------------------------------------------------------------
  * 托盘右键菜单
  *
  * 菜单命令统一用 PostMessage 回投，避免在菜单还处于弹出状态时弹出对话框。
@@ -2209,8 +3914,13 @@ static void ShowContextMenu(void)
                 MF_STRING | (IsAutoStartEnabled() ? MF_CHECKED : MF_UNCHECKED),
                 IDM_AUTOSTART, T(S_MENU_AUTOSTART));
 
-    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hMenu, MF_STRING, IDM_CHECK, T(S_MENU_CHECK));
+
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+
+    /* 和「关于」窗口里那个按钮干同一件事 */
+    AppendMenuW(hMenu, MF_STRING, IDM_UPDATE_CHECK, T(S_BTN_CHECK_UPDATE));
+
     AppendMenuW(hMenu, MF_STRING, IDM_ABOUT, T(S_MENU_ABOUT));
     AppendMenuW(hMenu, MF_STRING, IDM_EXIT,  T(S_MENU_EXIT));
 
@@ -2428,6 +4138,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             ShowCheckWindow();
             break;
 
+        case IDM_UPDATE_CHECK:
+            ShowUpdateCheckWindow();
+            break;
+
         case IDM_AUTOSTART:
             /* 取反之前先读一次实际状态，避免和外部改动脱节 */
             SetAutoStart(IsAutoStartEnabled() ? FALSE : TRUE);
@@ -2449,6 +4163,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     case WM_TIMER:
         if (wParam == TIMER_LOCK_DELAY)
             OnLockDelayElapsed();
+        return 0;
+
+    case WM_APP_UPDATE_DONE:
+        OnStartupUpdateResult();
         return 0;
 
     case WM_POWERBROADCAST:
@@ -2663,6 +4381,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         if (ReadPowerSettings(&cfg) && !SettingsAllRecommended(&cfg))
             ShowSettingsWarning();
     }
+
+    /* --- 启动后静默查一次更新（失败就安静地算了） ------------------------ */
+
+    StartStartupUpdateCheck();
 
     /* --- 消息循环 -------------------------------------------------------- */
 

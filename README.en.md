@@ -30,9 +30,10 @@ To remove completely: untick **Run at startup** → exit → delete the exe → 
   | Lock delay | Radio submenu: Immediately / 3 / 5 / 10 / 30 seconds. Locks that many seconds after the display turns off or the lid closes; waking the display or opening the lid in the meantime cancels it |
   | —— separator —— | |
   | Run at startup | Starts automatically at sign-in; unchecking **deletes** the registry value |
+  | Power settings | Verifies the power button / lid actions against the recommended values, with one-click fix |
   | —— separator —— | |
-  | Check settings | Verifies the power button / lid actions against the recommended values, with one-click fix |
-  | About | Author, project link (clickable), version and registry location; also a language button |
+  | Check for updates | Same as the button of that name in the About window: looks for a newer release |
+  | About | Tagline, author, project link and license (both clickable), version and registry location; also a language button and a "Check for updates" button |
   | Exit | Removes the tray icon and quits |
 
 - **Localization**: English / Simplified Chinese. On first run a language picker appears
@@ -46,6 +47,8 @@ To remove completely: untick **Run at startup** → exit → delete the exe → 
     only `0` / `3` / `5` / `10` / `30` are accepted, anything else falls back to `0`
   - `Language` — `0` = English, `1` = Simplified Chinese (**absent** means first run)
   - `SkipSettingsWarning` — suppress the first-run settings notice (not written by default)
+  - `SkippedVersion` — the remote version number remembered by "Skip this version"
+    (not written by default)
 - Autostart is stored as a `ScreenOffLock` value under
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, containing the quoted full path to
   the exe. **Unchecking deletes that value outright** — no `0` placeholder is left behind.
@@ -76,10 +79,10 @@ pwsh -File build.ps1 -Clean       # rebuild from scratch
 pwsh -File build.ps1 -Reinstall   # re-download the toolchain as well
 ```
 
-## Check settings
+## Power settings
 
 For this program to work, **the screen must actually be turned off and the lid state must
-be reported by the system**. The **Check settings** menu item reads two values from the
+be reported by the system**. The **Power settings** menu item reads two values from the
 current power plan:
 
 | Setting | Power setting GUID | Recommended (AC / battery) |
@@ -117,6 +120,36 @@ single-instance check.
 
 On first launch, if the settings are not all at their recommended values, a notice appears
 once. Ticking "Don't show this again" writes `SkipSettingsWarning` and it stops appearing.
+
+## Checking for updates
+
+The number after "Build" in `APP_VERSION` is compared against the tag of the latest GitHub
+Release (tags are plain numbers such as `1400`, so just keep the tag equal to the build
+number when publishing).
+
+- **A silent check runs at startup.** A prompt appears only when there really is a newer
+  version. A failed check is retried, up to 3 times, and then dropped quietly — no error,
+  no nagging. Ticking "Skip this version" records the remote version number in
+  `SkippedVersion` so that version is not offered again; a newer release brings the prompt
+  back.
+- **"Check for updates" — in the tray menu and in the About window** — opens a small window
+  that first
+  says "Checking for updates..." (cancellable), then turns into "Update available / You
+  already have the latest version / Update check failed", with the button changing to
+  "Get update / Done / Close". "Get update" opens the Release page in the default browser.
+- **Both windows show the release notes** — the text you write when publishing. Split them
+  into Chinese and English with a line containing just `---` and the Chinese UI gets the
+  Chinese half, the English UI the English one (decided by how many CJK characters each
+  half has, so the order does not matter). Markdown markers are stripped: `#`, `**`, `*`
+  and `` ` `` are removed, links keep only their text, and images become a short "see the
+  release page" note since they cannot be shown here. The window grows and shrinks with
+  the length of the notes.
+- Requests go through WinHTTP, but the **functions are fetched from `winhttp.dll` at
+  runtime**, so the static import table is still the same six system DLLs — no hard
+  networking dependency, and if `winhttp.dll` is missing this feature simply does nothing
+  while everything else keeps working. The request runs on a worker thread and never
+  blocks the tray menu.
+- Nothing else in the program touches the network: only these update actions do.
 
 ## Requirements
 
