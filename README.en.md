@@ -2,7 +2,7 @@
 
 <p align="center"><b>English</b> | <a href="README.md">简体中文</a></p>
 
-<p align="center">A lightweight Windows program that <b>locks the screen when the display turns off or the lid is closed</b>.</p>
+<p align="center">A lightweight Windows program that locks the screen when the display turns off or the lid is closed.</p>
 
 ---
 ## Quick start
@@ -11,13 +11,19 @@ Download  `ScreenOffLock.exe`  from the [Releases page](https://github.com/AomiR
 
 Just double-click `ScreenOffLock.exe` to run it — no administrator rights needed.
 
-For autostart, right-click the tray icon and tick **Run at startup** (it writes the
-registry Run key).
-
-To remove completely: untick **Run at startup** → exit → delete the exe → delete
-`HKCU\Software\ScreenOffLock`.
+For autostart, right-click the tray icon and tick **Run at startup**.
 
 ## Features
+
+When a Windows laptop is busy running a task, you might want to turn the screen off or
+close the lid without interrupting what is running. Sure, you can set the power button to
+"Turn off display" and the lid close action to "Do nothing" — but that only turns the
+display off, and waking it up asks for no password at all, so there is no real security.
+Setting it to sleep does lock the screen, but it is destructive: sleep suspends whatever is
+still running in the background.
+
+So this little program was born: it locks the screen automatically when a Windows laptop's
+display is turned off or the lid is closed.
 
 - Lives in the notification area with a single icon and no window
 - **Only the right mouse button does anything**; left click is deliberately ignored
@@ -55,6 +61,8 @@ To remove completely: untick **Run at startup** → exit → delete the exe → 
   The Run key itself belongs to Windows and is never created or removed, and other entries
   in it are untouched.
 - Launching the exe twice shows "Already running." and exits.
+- Clean removal: untick **Run at startup** → exit the program → delete the exe → delete
+  `HKCU\Software\ScreenOffLock`.
 
 ## Building from source
 
