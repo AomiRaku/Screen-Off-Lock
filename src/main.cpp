@@ -3211,7 +3211,12 @@ static int InfoPanelHeightLog(HDC hdc, const WCHAR *text, int cxLog)
     if (text == NULL || text[0] == L'\0')
         return 0;
 
-    return PanelTextHeightLog(hdc, text, cxLog - 28) + 24;   /* 上下各留 12 */
+    /*
+     * 按比实际窄一点的宽度预量高度。绘制时的坐标换算有一两像素的取整误差，
+     * 正好卡在换行临界的那一行可能因此提前折行；预量宁可多算一行，也不能让
+     * 最后一行被块的底边切掉。
+     */
+    return PanelTextHeightLog(hdc, text, cxLog - 28 - 8) + 24 + 10;  /* 上下各留 12，另加余量 */
 }
 
 /* 把内容块画出来，返回它占掉的高度（逻辑像素） */
@@ -3221,7 +3226,8 @@ static int DrawInfoPanel(HDC hdc, const WCHAR *text, int x, int y, int cx)
     HPEN   hpn, hOldPn;
     HFONT  hOld;
     RECT   r;
-    int    cy = InfoPanelHeightLog(hdc, text, cx);
+    int    cy  = InfoPanelHeightLog(hdc, text, cx);
+    int    pad;
 
     if (cy == 0)
         return 0;
@@ -3238,10 +3244,19 @@ static int DrawInfoPanel(HDC hdc, const WCHAR *text, int x, int y, int cx)
     DeleteObject(hbr);
     DeleteObject(hpn);
 
+    /*
+     * 文字在块里上下居中。预量的文本高度会比实际绘制小几个像素（DT_CALCRECT
+     * 不含行距余量），把这差值平摊到上下两边，块内看着才匀称、不会下面空一截。
+     */
+    pad = (cy - PanelTextHeightLog(hdc, text, cx - 28)) / 2;
+
+    if (pad < 6)
+        pad = 6;
+
     r.left   = AS(x + 14);
-    r.top    = AS(y + 12);
+    r.top    = AS(y + pad);
     r.right  = AS(x + cx - 14);
-    r.bottom = AS(y + cy - 12);
+    r.bottom = AS(y + cy - pad);
 
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
@@ -3308,21 +3323,21 @@ static void ResizeDialogCentered(HWND hWnd, int cxLogical, int cyLogical)
 
 static BOOL g_updateWarnSkip = FALSE;       /* 勾了“忽略当前版本” */
 static int  g_warnPanelH     = 0;           /* 内容块高度（逻辑像素），0 = 没有内容 */
-static int  g_warnCbY        = 0;           /* 复选框的 y（逻辑像素） */
+static int  g_warnRowY       = 0;           /* 复选框与按钮那一行的 y（逻辑像素） */
 
-/* 客户区要多高：复选框 + 间距 + 按钮 + 下边距 */
+/* 客户区要多高：内容块 + 间距 + 复选框/按钮那一行 + 下边距 */
 static int UpdateWarnClientHeight(void)
 {
-    return g_warnCbY + 20 + 18 + 32 + 18;
+    return UPDWARN_PANEL_Y + g_warnPanelH + 34 + 32 + 18;
 }
 
-/* 按说明文本的长度算好内容块高度和复选框位置 */
+/* 按说明文本的长度算好内容块高度；底下的复选框和按钮跟着往下让 */
 static void UpdateWarnLayout(void)
 {
     HDC hdc = GetDC(NULL);
 
     g_warnPanelH = InfoPanelHeightLog(hdc, CurrentUpdateText(), UPDWARN_CX - 56);
-    g_warnCbY    = UPDWARN_PANEL_Y + g_warnPanelH + 14;
+    g_warnRowY   = UPDWARN_PANEL_Y + g_warnPanelH + 34;
 
     ReleaseDC(NULL, hdc);
 }
@@ -3367,8 +3382,8 @@ static void UpdateWarnPaint(HWND hWnd)
     if (g_warnPanelH > 0)
         DrawInfoPanel(hdc, CurrentUpdateText(), 28, UPDWARN_PANEL_Y, UPDWARN_CX - 56);
 
-    DrawCheckbox(hdc, AS(28), AS(g_warnCbY), AS(20), g_updateWarnSkip);
-    AboutText(hdc, g_fontBody, clrText, T(S_UPDATE_IGNORE), 58, g_warnCbY + 2, 260);
+    DrawCheckbox(hdc, AS(28), AS(g_warnRowY + 6), AS(20), g_updateWarnSkip);
+    AboutText(hdc, g_fontBody, clrText, T(S_UPDATE_IGNORE), 58, g_warnRowY + 8, 260);
 
     EndPaint(hWnd, &ps);
 }
@@ -3440,7 +3455,7 @@ static LRESULT CALLBACK UpdateWarnWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
         {
             int mx = (int)(short)LOWORD(lParam);
             int my = (int)(short)HIWORD(lParam);
-            int bx = AS(28), by = AS(g_warnCbY), bs = AS(20), pad = AS(6);
+            int bx = AS(28), by = AS(g_warnRowY + 6), bs = AS(20), pad = AS(6);
 
             /* 点方框本身或右边的文字都算 */
             if (mx >= bx - pad && mx <= bx + bs + AS(160) &&
@@ -3562,7 +3577,7 @@ static int UpdateCheckClientHeight(void)
     if (g_chkPanelH > 0)
         bottom = UPDCHK_PANEL_Y + g_chkPanelH;      /* 一直算到内容块底 */
 
-    return bottom + 16 + 32 + 18;
+    return bottom + 32 + 32 + 18;
 }
 
 /* 按钮靠右下角，和启动时那个提示窗摆法一致 */
